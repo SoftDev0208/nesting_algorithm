@@ -1,10 +1,13 @@
 import json
 import matplotlib.pyplot as plt
-from shapely.geometry import Polygon as ShapelyPolygon, box
-from shapely.affinity import translate, rotate
 import numpy as np
 import tkinter as tk
+import math
+from shapely.geometry import Polygon as ShapelyPolygon, box
+from shapely.affinity import translate, rotate
+from shapely.geometry import MultiPolygon
 from tkinter import filedialog, messagebox
+
 
 # Load JSON
 def load_json(json_path):
@@ -29,45 +32,213 @@ def poly_size(poly):
     minx, miny, maxx, maxy = poly.bounds
     return maxx-minx, maxy-miny
 
+def bbox_size(polys):
+
+    minx = min(p.bounds[0] for p in polys)
+    miny = min(p.bounds[1] for p in polys)
+    maxx = max(p.bounds[2] for p in polys)
+    maxy = max(p.bounds[3] for p in polys)
+
+    return maxx-minx, maxy-miny, (minx,miny,maxx,maxy)
+
+def is_trapezoid(poly):
+
+    coords = list(poly.exterior.coords)[:-1]
+
+    if len(coords) != 4:
+        return False
+
+    # compute edge lengths
+    lengths = []
+
+    for i in range(4):
+        x1, y1 = coords[i]
+        x2, y2 = coords[(i+1) % 4]
+
+        length = ((x2-x1)**2 + (y2-y1)**2) ** 0.5
+        lengths.append(length)
+
+    # sort lengths
+    lengths.sort()
+
+    # compare smallest with others
+    tolerance = 1e-3
+
+    # if one edge clearly different → treat as trapezoid/wedge
+    if abs(lengths[0] - lengths[1]) > tolerance:
+        return True
+
+    if abs(lengths[2] - lengths[3]) > tolerance:
+        return True
+
+    return False
+
+def combine_trapezoids(poly):
+
+    best_area = float("inf")
+    best_union = None
+
+    rotations = [0, 90, 180, 270]
+
+    for angle1 in rotations:
+        for angle2 in rotations:
+
+            p1 = rotate(poly, angle1, origin=(0,0))
+            p2 = rotate(poly, angle2, origin=(0,0))
+
+            for dx in np.linspace(-1000, 1000, 200):
+                for dy in np.linspace(-1000, 1000, 200):
+
+                    p2_moved = translate(p2, xoff=dx, yoff=dy)
+
+                    if p1.intersects(p2_moved):
+                        continue
+
+                    combined = p1.union(p2_moved)
+
+                    minx, miny, maxx, maxy = combined.bounds
+                    area = (maxx-minx)*(maxy-miny)
+
+                    if area < best_area:
+                        best_area = area
+                        best_union = combined
+
+    return best_union
+
+def build_parts_list(parts):
+
+    parts_sorted = []
+
+    for part in parts:
+        poly = part_to_polygon(part)
+        qty = part.get('quantity', 1)
+
+        part_area = bounding_area(poly)
+        total_area = part_area * qty
+
+        parts_sorted.append((total_area, part, poly))
+
+    # sort by total area descending
+    #parts_sorted.sort(key=lambda x: x[0], reverse=True)
+
+    parts_list = []
+
+    for _, part, poly in parts_sorted:
+
+        qty = part.get('quantity', 1)
+        pid = part['id']
+
+        if is_trapezoid(poly):
+
+            pair_poly = combine_trapezoids(poly)
+
+            pair_count = qty // 2
+            remainder = qty % 2
+
+            for _ in range(pair_count):
+                parts_list.append((pid + "_pair", pair_poly))
+
+            if remainder == 1:
+                parts_list.append((pid, poly))
+
+        else:
+            for _ in range(qty):
+                parts_list.append((pid, poly))
+
+    return parts_list
+
+
+def bounding_area(poly):
+    minx, miny, maxx, maxy = poly.bounds
+    return (maxx-minx)*(maxy-miny)
+
+# Check if part fits inside plate in 0° or 90° orientation
+def can_part_fit(poly, plate_poly):
+    for angle in [0, 90]:
+        # Rotate part around centroid (or 0,0)
+        rotated = rotate(poly, angle, origin='centroid', use_radians=False)
+
+        # Shift polygon if it goes outside plate bounds (minx < 0 or miny < 0)
+        minx, miny, maxx, maxy = rotated.bounds
+        dx = max(0, -minx)          # shift right if minx < 0
+        dy = max(0, -miny)          # shift up if miny < 0
+        rotated = translate(rotated, xoff=dx, yoff=dy)
+
+        if plate_poly.contains(rotated):
+            return True, angle
+    return False, None
+
 # Nesting with quantities, no overlaps, full-fit validation
 def nest_parts_with_full_fit(parts, plate_poly):
-    parts_list = []
-    for part in parts:
-        qty = part.get('quantity', 1)
-        for _ in range(qty):
-            parts_list.append((part['id'], part_to_polygon(part)))
+    """
+    Nest parts inside the plate using bottom-left heuristic.
+    Automatically rotates parts 0° or 90° and translates to fit narrow plates.
+    """
+    parts_list = build_parts_list(parts)
 
-    # Sort by area descending
-    parts_list.sort(key=lambda x: x[1].area, reverse=True)
+    # Sort parts by bounding area descending (largest first)
+    parts_list.sort(key=lambda x: bounding_area(x[1]), reverse=True)
 
     placed_parts = []
     occupied = []
+
     plate_minx, plate_miny, plate_maxx, plate_maxy = plate_poly.bounds
 
     for pid, poly in parts_list:
         placed = False
+
+        # Try rotations 0° and 90° for narrow plate fit
         for angle in [0, 90]:
-            rotated = rotate(poly, angle, origin=(0,0), use_radians=False)
+            # Rotate around centroid
+            rotated = rotate(poly, angle, origin='centroid', use_radians=False)
+
+            # Shift polygon to start at plate origin
+            minx, miny, maxx, maxy = rotated.bounds
+            dx = plate_minx - minx
+            dy = plate_miny - miny
+            rotated = translate(rotated, xoff=dx, yoff=dy)
             rw, rh = poly_size(rotated)
-            x_positions = np.arange(plate_minx, plate_maxx - rw, 50)
-            y_positions = np.arange(plate_miny, plate_maxy - rh, 50)
-            for x in x_positions:
-                for y in y_positions:
-                    candidate = translate(rotated, xoff=x, yoff=y)
-                    # Full-fit validation: candidate must be completely inside plate
-                    if not plate_poly.contains(candidate):
-                        continue
-                    overlap = any(candidate.intersects(o) for o in occupied)
-                    if not overlap:
-                        placed_parts.append({'id': pid, 'poly': candidate, 'x': x, 'y': y, 'angle': angle})
-                        occupied.append(candidate)
-                        print(f"Placed part {pid} at x={x}, y={y}, angle={angle}")
-                        placed = True
-                        break
-                if placed:
+
+            # Skip if rotated part is bigger than plate
+            if rw > (plate_maxx - plate_minx) or rh > (plate_maxy - plate_miny):
+                continue
+
+            # --- Bottom-left heuristic ---
+            # Candidate positions are the left and top edges of placed parts + plate edges
+            candidate_positions = [(plate_minx, plate_miny)]  # start with bottom-left corner
+            for p in placed_parts:
+                px_min, py_min, px_max, py_max = p['poly'].bounds
+                # right edge of existing part
+                candidate_positions.append((px_max, py_min))
+                # top edge of existing part
+                candidate_positions.append((px_min, py_max))
+
+            # Try candidate positions
+            for x, y in candidate_positions:
+                candidate = translate(rotated, xoff=x, yoff=y)
+
+                if not plate_poly.contains(candidate):
+                    continue
+
+                overlap = any(
+                    candidate.intersection(o['poly']).area > 1e-6
+                    for o in placed_parts
+                )
+
+                if not overlap:
+                    placed_parts.append({
+                        'id': pid,
+                        'poly': candidate,
+                        'x': x,
+                        'y': y,
+                        'angle': angle
+                    })
+                    placed = True
+                    print(f"Placed part {pid} at x={x}, y={y}, angle={angle}")
                     break
             if placed:
                 break
+
         if not placed:
             print(f"Could not place part {pid}, not enough space")
 
@@ -78,14 +249,27 @@ def nest_parts_with_full_fit(parts, plate_poly):
 def plot_arrangement(placed_parts, plate_poly):
     fig, ax = plt.subplots(figsize=(12,6))
     ax.set_aspect('equal')
+
     xs, ys = plate_poly.exterior.xy
     ax.plot(xs, ys, 'black')
+
     for p in placed_parts:
-        xs, ys = p['poly'].exterior.xy
-        ax.plot(xs, ys, 'b')
-        cx = np.mean(xs)
-        cy = np.mean(ys)
-        ax.text(cx, cy, str(p['id']), ha='center', va='center', fontsize=8, color='green')
+        poly = p['poly']
+
+        if isinstance(poly, MultiPolygon):
+            polys = poly.geoms
+        else:
+            polys = [poly]
+
+        for g in polys:
+            xs, ys = g.exterior.xy
+            ax.plot(xs, ys, 'b')
+
+            cx = np.mean(xs)
+            cy = np.mean(ys)
+            ax.text(cx, cy, str(p['id']), ha='center', va='center',
+                    fontsize=8, color='green')
+
     ax.set_title('Layout Filled According to Quantities - Full Fit')
     plt.xlabel('X')
     plt.ylabel('Y')
@@ -126,7 +310,8 @@ class NestingApp:
         file_path = filedialog.askopenfilename(filetypes=[('JSON Files', '*.json')])
         if file_path:
             self.parts = load_json(file_path)['parts']
-            messagebox.showinfo("Success", f"Loaded {len(self.parts)} parts")
+            total_quantity = sum(p.get('quantity',1) for p in self.parts)
+            messagebox.showinfo("Success", f"Loaded {len(self.parts)} part objects ({total_quantity} total items)")
 
     def run_nesting(self):
         if self.parts is None:
