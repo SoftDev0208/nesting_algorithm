@@ -6,7 +6,8 @@ from tkinter import filedialog, messagebox
 import matplotlib.pyplot as plt
 import numpy as np
 from shapely.affinity import rotate, translate
-from shapely.geometry import MultiPolygon
+from shapely.geometry import Point, MultiPolygon, GeometryCollection
+from shapely.ops import unary_union
 from shapely.geometry import Polygon as ShapelyPolygon
 from shapely.geometry import box
 
@@ -473,70 +474,6 @@ def get_circle_template(parts):
 def make_circle_at(circle_poly_norm, radius, cx, cy):
     return translate(circle_poly_norm, xoff=cx - radius, yoff=cy - radius)
 
-
-def reserve_top_hex_circle_band(parts, plate_poly, circle_count):
-    """
-    Reserve enough top area for all circles in a hex band.
-    """
-    circle_poly_norm, radius, diameter, circle_pid = get_circle_template(parts)
-    if circle_poly_norm is None or circle_count <= 0:
-        return [], plate_poly
-
-    minx, miny, maxx, maxy = plate_poly.bounds
-    width = maxx - minx
-
-    row1_cap = int(width // (2.0 * radius))
-    row2_cap = max(0, int((width - radius) // (2.0 * radius)))
-
-    if row1_cap <= 0:
-        return [], plate_poly
-
-    reserved = []
-    remaining = circle_count
-    rows = []
-    row_index = 0
-
-    while remaining > 0:
-        cap = row1_cap if row_index % 2 == 0 else row2_cap
-        if cap <= 0:
-            break
-        take = min(cap, remaining)
-        rows.append((row_index, take))
-        remaining -= take
-        row_index += 1
-
-    if remaining > 0:
-        return [], plate_poly
-
-    step_y = math.sqrt(3.0) * radius
-
-    for row_index, take in rows:
-        cy = maxy - radius - row_index * step_y
-        x_offset = 0.0 if row_index % 2 == 0 else radius
-        cx = minx + radius + x_offset
-
-        for _ in range(take):
-            candidate = make_circle_at(circle_poly_norm, radius, cx, cy)
-            if not plate_poly.contains(candidate):
-                return [], plate_poly
-
-            reserved.append(
-                {
-                    "id": circle_pid,
-                    "poly": candidate,
-                    "x": cx - radius,
-                    "y": cy - radius,
-                    "angle": 0,
-                    "shape": "circle",
-                }
-            )
-            cx += 2.0 * radius
-
-    band_bottom = min(p["poly"].bounds[1] for p in reserved)
-    working_plate = box(minx, miny, maxx, band_bottom)
-    return reserved, working_plate
-
-
 def sort_centers_by_anchor(centers, anchor):
     if anchor == "bl":
         return sorted(centers, key=lambda c: (c[1], c[0]))
@@ -549,8 +486,61 @@ def sort_centers_by_anchor(centers, anchor):
     return sorted(centers, key=lambda c: (c[1], c[0]))
 
 
-def generate_circle_centers(plate_poly, radius, mode="hex", anchor="bl"):
-    minx, miny, maxx, maxy = plate_poly.bounds
+def _clean_geom(g):
+    if g.is_empty:
+        return g
+    return g.buffer(0)
+
+
+def _iter_polygons(g):
+    if g.is_empty:
+        return []
+
+    if isinstance(g, ShapelyPolygon):
+        return [g]
+
+    if isinstance(g, MultiPolygon):
+        return [p for p in g.geoms if not p.is_empty]
+
+    if isinstance(g, GeometryCollection):
+        polys = []
+        for sub in g.geoms:
+            polys.extend(_iter_polygons(sub))
+        return polys
+
+    return []
+
+
+def get_circle_center_region(plate_poly, placed_parts, radius, eps=1e-7):
+    """
+    Region where a circle CENTER may be placed.
+
+    Correct logic:
+    - shrink plate inward by radius
+    - expand occupied parts outward by radius
+    - remaining area is valid center region
+    """
+    usable_plate = _clean_geom(plate_poly.buffer(-(radius - eps)))
+    if usable_plate.is_empty:
+        return usable_plate
+
+    if not placed_parts:
+        return usable_plate
+
+    occupied = unary_union([p["poly"] for p in placed_parts])
+    occupied = _clean_geom(occupied)
+
+    blocked = _clean_geom(occupied.buffer(radius - eps))
+    center_region = _clean_geom(usable_plate.difference(blocked))
+    return center_region
+
+
+def generate_circle_centers_in_region(region_poly, radius, mode="hex", anchor="bl", x_phase=0.0, y_phase=0.0):
+    """
+    region_poly is already a VALID CENTER REGION.
+    So do NOT shrink it again by radius.
+    """
+    minx, miny, maxx, maxy = region_poly.bounds
     centers = []
     eps = 1e-9
 
@@ -559,94 +549,202 @@ def generate_circle_centers(plate_poly, radius, mode="hex", anchor="bl"):
         step_y = math.sqrt(3.0) * radius
 
         row = 0
-        y = miny + radius
-        while y <= maxy - radius + eps:
-            x_offset = radius if row % 2 == 1 else 0.0
-            x = minx + radius + x_offset
-            while x <= maxx - radius + eps:
-                centers.append((x, y))
+        y = miny + y_phase
+        while y <= maxy + eps:
+            row_shift = radius if row % 2 == 1 else 0.0
+            x = minx + x_phase + row_shift
+
+            while x <= maxx + eps:
+                pt = Point(x, y)
+                if region_poly.covers(pt):
+                    centers.append((x, y))
                 x += step_x
+
             y += step_y
             row += 1
+
     else:
         step = 2.0 * radius
-        y = miny + radius
-        while y <= maxy - radius + eps:
-            x = minx + radius
-            while x <= maxx - radius + eps:
-                centers.append((x, y))
+        y = miny + y_phase
+        while y <= maxy + eps:
+            x = minx + x_phase
+            while x <= maxx + eps:
+                pt = Point(x, y)
+                if region_poly.covers(pt):
+                    centers.append((x, y))
                 x += step
             y += step
 
     return sort_centers_by_anchor(centers, anchor)
 
 
-def get_circle_pack_orders():
-    return [
-        ("hex", "tr"),
-        ("hex", "tl"),
-        ("hex", "br"),
-        ("hex", "bl"),
-        ("grid", "tr"),
-        ("grid", "tl"),
-        ("grid", "br"),
-        ("grid", "bl"),
-    ]
-
-
 def place_circles_best_pattern(parts, plate_poly, placed_parts, circle_count):
+    """
+    Place circles into the true remaining usable region, maximizing count.
+    Main fix: search MANY more phase offsets, not just a few coarse ones.
+    """
     circle_poly_norm, radius, diameter, circle_pid = get_circle_template(parts)
     if circle_poly_norm is None or circle_count <= 0:
         return placed_parts, 0
 
-    best_layout = None
-    best_count = -1
+    center_region = get_circle_center_region(plate_poly, placed_parts, radius)
+    if center_region.is_empty:
+        return placed_parts, 0
 
-    for mode, anchor in get_circle_pack_orders():
-        temp_parts = list(placed_parts)
-        count = 0
+    region_polys = sorted(_iter_polygons(center_region), key=lambda p: p.area, reverse=True)
+    if not region_polys:
+        return placed_parts, 0
 
-        centers = generate_circle_centers(plate_poly, radius, mode=mode, anchor=anchor)
+    best_layout = list(placed_parts)
+    best_count = 0
+    best_score = None
 
-        for cx, cy in centers:
-            candidate = make_circle_at(circle_poly_norm, radius, cx, cy)
+    # Dense phase search inside one lattice cell
+    def phase_values(step, samples):
+        return np.linspace(0.0, step, samples, endpoint=False)
 
-            if not plate_poly.contains(candidate):
-                continue
+    trials = [
+        ("hex", "tl"),
+        ("hex", "tr"),
+        ("hex", "bl"),
+        ("hex", "br"),
+        ("grid", "tl"),
+        ("grid", "tr"),
+        ("grid", "bl"),
+        ("grid", "br"),
+    ]
 
-            if has_real_overlap(candidate, temp_parts):
-                continue
+    for mode, anchor in trials:
+        if mode == "hex":
+            step_x = 2.0 * radius
+            step_y = math.sqrt(3.0) * radius
 
-            temp_parts.append(
-                {
-                    "id": circle_pid,
-                    "poly": candidate,
-                    "x": cx - radius,
-                    "y": cy - radius,
-                    "angle": 0,
-                    "shape": "circle",
-                }
-            )
-            count += 1
+            # Dense search: this is the important fix
+            x_phases = phase_values(step_x, 40)
+            y_phases = phase_values(step_y, 40)
+        else:
+            step_x = 2.0 * radius
+            step_y = 2.0 * radius
 
-            if count >= circle_count:
+            x_phases = phase_values(step_x, 40)
+            y_phases = phase_values(step_y, 40)
+
+        for x_phase in x_phases:
+            for y_phase in y_phases:
+                temp_parts = list(placed_parts)
+                placed_now = 0
+                placed_centers = []
+
+                for region_poly in region_polys:
+                    centers = generate_circle_centers_in_region(
+                        region_poly=region_poly,
+                        radius=radius,
+                        mode=mode,
+                        anchor=anchor,
+                        x_phase=float(x_phase),
+                        y_phase=float(y_phase),
+                    )
+
+                    for cx, cy in centers:
+                        candidate = make_circle_at(circle_poly_norm, radius, cx, cy)
+
+                        if not plate_poly.covers(candidate):
+                            continue
+                        if has_real_overlap(candidate, temp_parts):
+                            continue
+
+                        temp_parts.append(
+                            {
+                                "id": circle_pid,
+                                "poly": candidate,
+                                "x": cx - radius,
+                                "y": cy - radius,
+                                "angle": 0,
+                                "shape": "circle",
+                            }
+                        )
+                        placed_centers.append((cx, cy))
+                        placed_now += 1
+
+                        if placed_now >= circle_count:
+                            break
+
+                    if placed_now >= circle_count:
+                        break
+
+                # Prefer:
+                # 1) more circles
+                # 2) more top placement
+                # 3) more left placement
+                if placed_centers:
+                    if anchor in ("tl", "tr"):
+                        top_pref = max(cy for _, cy in placed_centers)
+                    else:
+                        top_pref = -min(cy for _, cy in placed_centers)
+
+                    if anchor in ("tl", "bl"):
+                        left_pref = -min(cx for cx, _ in placed_centers)
+                    else:
+                        left_pref = max(cx for cx, _ in placed_centers)
+
+                    score = (placed_now, top_pref, left_pref)
+                else:
+                    score = (placed_now, float("-inf"), float("-inf"))
+
+                if best_score is None or score > best_score:
+                    best_score = score
+                    best_count = placed_now
+                    best_layout = temp_parts
+
+                if best_count >= circle_count:
+                    break
+
+            if best_count >= circle_count:
                 break
-
-        if count > best_count:
-            best_count = count
-            best_layout = temp_parts
 
         if best_count >= circle_count:
             break
 
-    original_count = len(placed_parts)
-    final_parts = best_layout if best_layout is not None else placed_parts
+    for p in best_layout[len(placed_parts):]:
+        print(
+            f"Placed part {p['id']} (shape=circle) at "
+            f"x={p['x']}, y={p['y']}, angle=0"
+        )
 
-    for p in final_parts[original_count:]:
-        print(f"Placed part {p['id']} (shape=circle) at x={p['x']}, y={p['y']}, angle=0")
+    return best_layout, best_count
 
-    return final_parts, max(0, best_count)
+def plot_center_region(plate_poly, placed_parts, parts):
+    circle_poly_norm, radius, diameter, circle_pid = get_circle_template(parts)
+    if circle_poly_norm is None:
+        print("No circle template found")
+        return
 
+    center_region = get_circle_center_region(plate_poly, placed_parts, radius)
+
+    fig, ax = plt.subplots(figsize=(12, 6))
+    ax.set_aspect("equal")
+
+    # plate
+    xs, ys = plate_poly.exterior.xy
+    ax.plot(xs, ys, "black", linewidth=2)
+
+    # placed parts
+    for p in placed_parts:
+        poly = p["poly"]
+        polys = poly.geoms if isinstance(poly, MultiPolygon) else [poly]
+        for g in polys:
+            xs, ys = g.exterior.xy
+            ax.plot(xs, ys, "blue")
+
+    # center region
+    for g in _iter_polygons(center_region):
+        xs, ys = g.exterior.xy
+        ax.fill(xs, ys, alpha=0.3)
+
+    ax.set_title("Valid region for circle centers")
+    plt.xlabel("X")
+    plt.ylabel("Y")
+    plt.show()
 
 # -----------------------------
 # Role inference from geometry
@@ -783,6 +881,7 @@ def nest_parts_with_full_fit(parts, plate_poly):
             placed_parts.append(candidate)
 
     # Step 5: circles -> fit into remaining free space
+    #plot_center_region(plate_poly, placed_parts, parts)
     placed_parts, circle_count = place_circles_best_pattern(
         parts=parts,
         plate_poly=plate_poly,
