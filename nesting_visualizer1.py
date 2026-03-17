@@ -146,7 +146,7 @@ def detect_shape_type(part, poly):
     coords = list(poly.exterior.coords)[:-1]
     n = len(coords)
 
-    if is_rectangle(poly):
+    if is_rectangle(poly) or is_chamfered_rectangle(poly):
         return "rectangle"
     if is_trapezoid(poly):
         return "trapezoid"
@@ -166,85 +166,6 @@ def shape_priority(shape_type):
         "circle": 99,
     }
     return order.get(shape_type, 50)
-
-def split_parts_by_shape(parts_list):
-    rectangles = [p for p in parts_list if p["shape"] == "rectangle"]
-    trapezoids = [p for p in parts_list if p["shape"] == "trapezoid"]
-    pentagons = [p for p in parts_list if p["shape"] == "pentagon"]
-    hexagons = [p for p in parts_list if p["shape"] == "hexagon"]
-    circles = [p for p in parts_list if p["shape"] == "circle"]
-
-    others = [
-        p for p in parts_list
-        if p["shape"] not in {"rectangle", "trapezoid", "pentagon", "hexagon", "circle"}
-    ]
-
-    return rectangles, trapezoids, pentagons, hexagons, others, circles
-
-
-def split_bar_roles(items):
-    """
-    Inside one shape group only:
-    - pick one best horizontal shelf-like part
-    - pick remaining bar-like parts as side bars
-    - the rest are fillers
-    """
-    top_shelf = None
-    side_bars = []
-    fillers = list(items)
-
-    bar_like = [p for p in items if is_bar_like(p["poly"])]
-
-    if bar_like:
-        top_shelf = max(
-            bar_like,
-            key=lambda item: orientation_profile(item, "horizontal")["score"]
-        )
-        if top_shelf in fillers:
-            fillers.remove(top_shelf)
-        bar_like.remove(top_shelf)
-
-    side_bars = sorted(
-        bar_like,
-        key=lambda item: orientation_profile(item, "vertical")["score"],
-        reverse=True,
-    )
-
-    for item in side_bars:
-        if item in fillers:
-            fillers.remove(item)
-
-    return top_shelf, side_bars, fillers
-
-def minimum_rotated_rect_dims(poly):
-    mrr = poly.minimum_rotated_rectangle
-    coords = list(mrr.exterior.coords)[:-1]
-
-    lengths = []
-    for i in range(len(coords)):
-        x1, y1 = coords[i]
-        x2, y2 = coords[(i + 1) % len(coords)]
-        lengths.append(math.hypot(x2 - x1, y2 - y1))
-
-    long_side = max(lengths)
-    short_side = min(lengths)
-    return long_side, short_side, mrr.area
-
-
-def is_bar_like(poly, min_aspect=3.0, min_fill=0.70):
-    """
-    Geometry-role test:
-    long narrow parts, even if they are hexagons, can act like bars.
-    """
-    long_side, short_side, mrr_area = minimum_rotated_rect_dims(poly)
-
-    if short_side < 1e-9 or mrr_area < 1e-9:
-        return False
-
-    aspect = long_side / short_side
-    fill_ratio = poly.area / mrr_area
-
-    return aspect >= min_aspect and fill_ratio >= min_fill
 
 
 # -----------------------------
@@ -438,46 +359,25 @@ def place_item_bottom_left(item, placed_parts, plate_poly, preferred_angles=None
     return best
 
 
-def place_item_bottom_left(item, placed_parts, plate_poly, preferred_angles=None):
+def place_item_top_left(item, placed_parts, plate_poly, preferred_angles=None):
     if preferred_angles is None:
         preferred_angles = [0, 90, 180, 270]
 
+    _, _, _, plate_top = plate_poly.bounds
     best = None
     best_score = None
-    debug = init_place_debug(item, "bottom-left")
-
-    plate_minx, plate_miny, plate_maxx, plate_maxy = plate_poly.bounds
-    plate_w = plate_maxx - plate_minx
-    plate_h = plate_maxy - plate_miny
 
     for angle in preferred_angles:
-        debug["rotations"].append(angle)
-
         rotated = rotate_normalize(item["poly"], angle)
         rw, rh = poly_size(rotated)
 
-        if rw > plate_w or rh > plate_h:
-            debug["too_large"].append((angle, rw, rh))
-            continue
-
-        positions = generate_candidate_positions_for_part(placed_parts, plate_poly, rw, rh)
-        debug["candidate_positions"] += len(positions)
-
-        for x, y in positions:
+        for x, y in generate_candidate_positions_for_part(placed_parts, plate_poly, rw, rh):
             candidate = translate(rotated, xoff=x, yoff=y)
-            debug["tested_positions"] += 1
-
-            if not plate_poly.contains(candidate):
-                debug["outside_plate"] += 1
+            if not valid_candidate(candidate, placed_parts, plate_poly):
                 continue
 
-            if has_real_overlap(candidate, placed_parts):
-                debug["overlap"] += 1
-                continue
-
-            debug["valid_positions"] += 1
-            score = (y, x, rw * rh)
-
+            minx, miny, maxx, maxy = candidate.bounds
+            score = (plate_top - maxy, minx, rw * rh)
             if best is None or score < best_score:
                 best = {
                     "id": item["id"],
@@ -489,7 +389,7 @@ def place_item_bottom_left(item, placed_parts, plate_poly, preferred_angles=None
                 }
                 best_score = score
 
-    return best, debug
+    return best
 
 
 def cluster_bounds(placed_parts, fallback_poly):
@@ -504,41 +404,22 @@ def cluster_bounds(placed_parts, fallback_poly):
 
 
 def place_item_near_reference_vertical(item, placed_parts, plate_poly, ref_bounds):
+    """
+    Prefer vertical placement near the current cluster right edge.
+    """
     ref_right = ref_bounds[2]
     best = None
     best_score = None
-    debug = init_place_debug(item, "right-lane-vertical")
-
-    plate_minx, plate_miny, plate_maxx, plate_maxy = plate_poly.bounds
-    plate_w = plate_maxx - plate_minx
-    plate_h = plate_maxy - plate_miny
 
     for angle in [90, 270]:
-        debug["rotations"].append(angle)
-
         rotated = rotate_normalize(item["poly"], angle)
         rw, rh = poly_size(rotated)
 
-        if rw > plate_w or rh > plate_h:
-            debug["too_large"].append((angle, rw, rh))
-            continue
-
-        positions = generate_candidate_positions_for_part(placed_parts, plate_poly, rw, rh)
-        debug["candidate_positions"] += len(positions)
-
-        for x, y in positions:
+        for x, y in generate_candidate_positions_for_part(placed_parts, plate_poly, rw, rh):
             candidate = translate(rotated, xoff=x, yoff=y)
-            debug["tested_positions"] += 1
-
-            if not plate_poly.contains(candidate):
-                debug["outside_plate"] += 1
+            if not valid_candidate(candidate, placed_parts, plate_poly):
                 continue
 
-            if has_real_overlap(candidate, placed_parts):
-                debug["overlap"] += 1
-                continue
-
-            debug["valid_positions"] += 1
             minx, miny, maxx, maxy = candidate.bounds
 
             penalty_left_of_ref = 0 if minx >= ref_right - 1e-6 else 1
@@ -560,116 +441,18 @@ def place_item_near_reference_vertical(item, placed_parts, plate_poly, ref_bound
                 }
                 best_score = score
 
-    return best, debug
+    return best
 
 
 def place_item_generic(item, placed_parts, plate_poly):
+    """
+    Fallback:
+    - trapezoid-like parts -> bottom-left
+    - others -> top-left
+    """
     if item["shape"] == "trapezoid":
         return place_item_bottom_left(item, placed_parts, plate_poly)
     return place_item_top_left(item, placed_parts, plate_poly)
-
-def init_place_debug(item, mode):
-    return {
-        "id": item["id"],
-        "shape": item["shape"],
-        "mode": mode,
-        "rotations": [],
-        "too_large": [],
-        "tested_positions": 0,
-        "outside_plate": 0,
-        "overlap": 0,
-        "valid_positions": 0,
-        "candidate_positions": 0,
-    }
-
-def place_item_top_left(item, placed_parts, plate_poly, preferred_angles=None):
-    if preferred_angles is None:
-        preferred_angles = [0, 90, 180, 270]
-
-    _, _, _, plate_top = plate_poly.bounds
-    plate_minx, plate_miny, plate_maxx, plate_maxy = plate_poly.bounds
-    plate_w = plate_maxx - plate_minx
-    plate_h = plate_maxy - plate_miny
-
-    best = None
-    best_score = None
-    debug = init_place_debug(item, "top-left")
-
-    for angle in preferred_angles:
-        debug["rotations"].append(angle)
-
-        rotated = rotate_normalize(item["poly"], angle)
-        rw, rh = poly_size(rotated)
-
-        if rw > plate_w or rh > plate_h:
-            debug["too_large"].append((angle, rw, rh))
-            continue
-
-        positions = generate_candidate_positions_for_part(placed_parts, plate_poly, rw, rh)
-        debug["candidate_positions"] += len(positions)
-
-        for x, y in positions:
-            candidate = translate(rotated, xoff=x, yoff=y)
-            debug["tested_positions"] += 1
-
-            if not plate_poly.contains(candidate):
-                debug["outside_plate"] += 1
-                continue
-
-            if has_real_overlap(candidate, placed_parts):
-                debug["overlap"] += 1
-                continue
-
-            debug["valid_positions"] += 1
-            minx, miny, maxx, maxy = candidate.bounds
-            score = (plate_top - maxy, minx, rw * rh)
-
-            if best is None or score < best_score:
-                best = {
-                    "id": item["id"],
-                    "poly": candidate,
-                    "x": x,
-                    "y": y,
-                    "angle": angle,
-                    "shape": item["shape"],
-                }
-                best_score = score
-
-    return best, debug
-
-
-def format_place_debug(debug):
-    parts = [
-        f"Could not place part {debug['id']}",
-        f"shape={debug['shape']}",
-        f"mode={debug['mode']}",
-    ]
-
-    if debug["too_large"] and debug["tested_positions"] == 0:
-        dims = ", ".join(
-            [f"angle={a} size=({w:.2f},{h:.2f})" for a, w, h in debug["too_large"]]
-        )
-        parts.append(f"reason=too large for plate [{dims}]")
-        return " | ".join(parts)
-
-    if debug["candidate_positions"] == 0:
-        parts.append("reason=no candidate positions generated")
-        return " | ".join(parts)
-
-    if debug["valid_positions"] == 0:
-        parts.append(
-            "reason=no valid position "
-            f"(tested={debug['tested_positions']}, "
-            f"outside={debug['outside_plate']}, "
-            f"overlap={debug['overlap']})"
-        )
-        return " | ".join(parts)
-
-    parts.append(
-        f"reason=no selected candidate "
-        f"(tested={debug['tested_positions']}, valid={debug['valid_positions']})"
-    )
-    return " | ".join(parts)
 
 
 # -----------------------------
@@ -689,6 +472,70 @@ def get_circle_template(parts):
 
 def make_circle_at(circle_poly_norm, radius, cx, cy):
     return translate(circle_poly_norm, xoff=cx - radius, yoff=cy - radius)
+
+
+def reserve_top_hex_circle_band(parts, plate_poly, circle_count):
+    """
+    Reserve enough top area for all circles in a hex band.
+    """
+    circle_poly_norm, radius, diameter, circle_pid = get_circle_template(parts)
+    if circle_poly_norm is None or circle_count <= 0:
+        return [], plate_poly
+
+    minx, miny, maxx, maxy = plate_poly.bounds
+    width = maxx - minx
+
+    row1_cap = int(width // (2.0 * radius))
+    row2_cap = max(0, int((width - radius) // (2.0 * radius)))
+
+    if row1_cap <= 0:
+        return [], plate_poly
+
+    reserved = []
+    remaining = circle_count
+    rows = []
+    row_index = 0
+
+    while remaining > 0:
+        cap = row1_cap if row_index % 2 == 0 else row2_cap
+        if cap <= 0:
+            break
+        take = min(cap, remaining)
+        rows.append((row_index, take))
+        remaining -= take
+        row_index += 1
+
+    if remaining > 0:
+        return [], plate_poly
+
+    step_y = math.sqrt(3.0) * radius
+
+    for row_index, take in rows:
+        cy = maxy - radius - row_index * step_y
+        x_offset = 0.0 if row_index % 2 == 0 else radius
+        cx = minx + radius + x_offset
+
+        for _ in range(take):
+            candidate = make_circle_at(circle_poly_norm, radius, cx, cy)
+            if not plate_poly.contains(candidate):
+                return [], plate_poly
+
+            reserved.append(
+                {
+                    "id": circle_pid,
+                    "poly": candidate,
+                    "x": cx - radius,
+                    "y": cy - radius,
+                    "angle": 0,
+                    "shape": "circle",
+                }
+            )
+            cx += 2.0 * radius
+
+    band_bottom = min(p["poly"].bounds[1] for p in reserved)
+    working_plate = box(minx, miny, maxx, band_bottom)
+    return reserved, working_plate
+
 
 def sort_centers_by_anchor(centers, anchor):
     if anchor == "bl":
@@ -837,34 +684,27 @@ def infer_layout_roles(parts_list):
     """
     Infer roles from geometry only, not IDs.
 
-    Shapes remain honest:
-    - rectangle stays rectangle
-    - hexagon stays hexagon
-    - trapezoid stays trapezoid
-
-    But some rectangle/hexagon parts can still play a bar-like role.
+    Roles:
+    - circles
+    - paired trapezoids
+    - one top horizontal shelf
+    - remaining bar-like rectangles as vertical bars
+    - fillers
     """
     circles = [p for p in parts_list if p["shape"] == "circle"]
     pair_trapezoids = [p for p in parts_list if p["shape"] == "trapezoid" and p["id"].endswith("_pair")]
 
-    remaining = [p for p in parts_list if p not in circles and p not in pair_trapezoids]
-
-    bar_like_candidates = [
-        p for p in remaining
-        if p["shape"] in {"rectangle", "hexagon"} and is_bar_like(p["poly"])
-    ]
+    remaining = [p for p in parts_list if p["shape"] != "circle" and p not in pair_trapezoids]
+    rect_like = [p for p in remaining if p["shape"] == "rectangle"]
 
     top_shelf = None
-    if bar_like_candidates:
-        top_shelf = max(
-            bar_like_candidates,
-            key=lambda item: orientation_profile(item, "horizontal")["score"]
-        )
+    if rect_like:
+        top_shelf = max(rect_like, key=lambda item: orientation_profile(item, "horizontal")["score"])
         remaining.remove(top_shelf)
-        bar_like_candidates.remove(top_shelf)
 
+    rect_like_remaining = [p for p in remaining if p["shape"] == "rectangle"]
     side_bars = sorted(
-        bar_like_candidates,
+        rect_like_remaining,
         key=lambda item: orientation_profile(item, "vertical")["score"],
         reverse=True,
     )
@@ -883,49 +723,128 @@ def infer_layout_roles(parts_list):
 # Main nesting
 # -----------------------------
 def nest_parts_with_full_fit(parts, plate_poly):
+    """
+    Geometry-role algorithm derived from your layout idea:
+
+    1) reserve full top band for circles
+    2) place paired trapezoids left-bottom
+    3) place one best horizontal shelf left-top (below circle band)
+    4) place remaining bar-like rectangles vertically near trapezoid block
+    5) place filler parts
+    6) append reserved circles
+    """
     parts_list = build_parts_list(parts)
+    circles, pair_trapezoids, top_shelf, side_bars, fillers = infer_layout_roles(parts_list)
 
-    # Split shapes
-    rectangles, trapezoids, pentagons, hexagons, others, circles = split_parts_by_shape(parts_list)
+    reserved_circles, working_plate = reserve_top_hex_circle_band(
+        parts=parts,
+        plate_poly=plate_poly,
+        circle_count=len(circles),
+    )
 
-    # Final placed parts list
+    if len(reserved_circles) != len(circles):
+        reserved_circles = []
+        working_plate = plate_poly
+
     placed_parts = []
 
-    # Helper: place shapes in order, using existing placement functions
-    shape_groups = [rectangles, trapezoids, pentagons, hexagons, others]
+    # Step 1: hardest irregulars -> bottom-left
+    for item in pair_trapezoids:
+        candidate = place_item_bottom_left(
+            item=item,
+            placed_parts=placed_parts,
+            plate_poly=working_plate,
+            preferred_angles=[0, 90, 180, 270],
+        )
+        if candidate is not None:
+            placed_parts.append(candidate)
+            print(
+                f"Placed part {candidate['id']} "
+                f"(shape={candidate['shape']}) "
+                f"at x={candidate['x']}, y={candidate['y']}, angle={candidate['angle']}"
+            )
+        else:
+            print(f"Could not place part {item['id']}, not enough space")
 
-    for group in shape_groups:
-        top_shelf, side_bars, fillers = split_bar_roles(group)
+    # Step 2: one best shelf -> top-left
+    if top_shelf is not None:
+        top_profile = orientation_profile(top_shelf, "horizontal")
+        candidate = place_item_top_left(
+            item=top_shelf,
+            placed_parts=placed_parts,
+            plate_poly=working_plate,
+            preferred_angles=[top_profile["angle"]],
+        )
+        if candidate is not None:
+            placed_parts.append(candidate)
+            print(
+                f"Placed part {candidate['id']} "
+                f"(shape={candidate['shape']}) "
+                f"at x={candidate['x']}, y={candidate['y']}, angle={candidate['angle']}"
+            )
+        else:
+            print(f"Could not place part {top_shelf['id']}, not enough space")
 
-        # Place top shelf first
-        if top_shelf:
-            candidate, dbg = place_item_top_left(top_shelf, placed_parts, plate_poly)
-            if candidate: placed_parts.append(candidate)
-            else: print(format_place_debug(dbg))
+    # Step 3: remaining bars -> vertical lane near current cluster
+    for item in side_bars:
+        side_profile = orientation_profile(item, "vertical")
+        ref_bounds = cluster_bounds(placed_parts, working_plate)
 
-        # Place side bars
-        for item in side_bars:
-            ref_bounds = cluster_bounds(placed_parts, plate_poly)
-            candidate, dbg = place_item_near_reference_vertical(item, placed_parts, plate_poly, ref_bounds)
-            if candidate is None:
-                candidate, dbg2 = place_item_bottom_left(item, placed_parts, plate_poly)
-                if candidate is None:
-                    print(format_place_debug(dbg))
-                    print("  fallback -> " + format_place_debug(dbg2))
-                else:
-                    placed_parts.append(candidate)
-            else:
-                placed_parts.append(candidate)
+        candidate = place_item_near_reference_vertical(
+            item=item,
+            placed_parts=placed_parts,
+            plate_poly=working_plate,
+            ref_bounds=ref_bounds,
+        )
 
-        # Place remaining fillers
-        for item in fillers:
-            candidate, dbg = place_item_generic(item, placed_parts, plate_poly)
-            if candidate: placed_parts.append(candidate)
-            else: print(format_place_debug(dbg))
+        if candidate is None:
+            candidate = place_item_bottom_left(
+                item=item,
+                placed_parts=placed_parts,
+                plate_poly=working_plate,
+                preferred_angles=[side_profile["angle"], 0, 180],
+            )
 
-    # Now place all circles in leftover space
-    if circles:
-        placed_parts, circle_count = place_circles_best_pattern(parts, plate_poly, placed_parts, circle_count=len(circles))
+        if candidate is not None:
+            placed_parts.append(candidate)
+            print(
+                f"Placed part {candidate['id']} "
+                f"(shape={candidate['shape']}) "
+                f"at x={candidate['x']}, y={candidate['y']}, angle={candidate['angle']}"
+            )
+        else:
+            print(f"Could not place part {item['id']}, not enough space")
+
+    # Step 4: fillers
+    for item in fillers:
+        candidate = place_item_generic(item, placed_parts, working_plate)
+        if candidate is not None:
+            placed_parts.append(candidate)
+            print(
+                f"Placed part {candidate['id']} "
+                f"(shape={candidate['shape']}) "
+                f"at x={candidate['x']}, y={candidate['y']}, angle={candidate['angle']}"
+            )
+        else:
+            print(f"Could not place part {item['id']}, not enough space")
+
+    # Step 5: circles
+    if reserved_circles:
+        for c in reserved_circles:
+            placed_parts.append(c)
+            print(
+                f"Placed part {c['id']} "
+                f"(shape={c['shape']}) "
+                f"at x={c['x']}, y={c['y']}, angle={c['angle']}"
+            )
+    else:
+        placed_parts, circle_count = place_circles_best_pattern(
+            parts=parts,
+            plate_poly=plate_poly,
+            placed_parts=placed_parts,
+            circle_count=len(circles),
+        )
+
         if circle_count < len(circles):
             missing = len(circles) - circle_count
             circle_pid = str(circles[0]["base_id"]) if circles else "circle"
