@@ -176,8 +176,8 @@ def nest_parts_with_full_fit(parts, plate_poly):
 
             rw, rh = poly_size(rotated)
 
-            x_positions = np.arange(plate_minx, plate_maxx - rw, 10)
-            y_positions = np.arange(plate_miny, plate_maxy - rh, 10)
+            x_positions = np.arange(plate_minx, plate_maxx - rw, 50)
+            y_positions = np.arange(plate_miny, plate_maxy - rh, 50)
 
             for x in x_positions:
                 for y in y_positions:
