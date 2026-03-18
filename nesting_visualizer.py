@@ -418,7 +418,6 @@ def cluster_bounds(placed_parts, fallback_poly):
     maxy = max(p["poly"].bounds[3] for p in placed_parts)
     return (minx, miny, maxx, maxy)
 
-
 def place_item_near_reference_vertical(item, placed_parts, plate_poly, ref_bounds):
     ref_right = ref_bounds[2]
     best = None
@@ -446,6 +445,8 @@ def place_item_near_reference_vertical(item, placed_parts, plate_poly, ref_bound
             if best is None or score < best_score:
                 best = {
                     "id": item["id"],
+                    "base_id": item.get("base_id", item["id"]),
+                    "unit_count": item.get("unit_count", 1),
                     "poly": candidate,
                     "x": x,
                     "y": y,
@@ -455,7 +456,6 @@ def place_item_near_reference_vertical(item, placed_parts, plate_poly, ref_bound
                 best_score = score
 
     return best
-
 
 def place_item_generic(item, placed_parts, plate_poly):
     if item["shape"] == "trapezoid":
@@ -1007,6 +1007,8 @@ def place_item_min_trapezoid_waste(item, placed_parts, plate_poly, current_traps
             if best is None or score < best_score:
                 best = {
                     "id": item["id"],
+                    "base_id": item.get("base_id", item["id"]),
+                    "unit_count": item.get("unit_count", 1),
                     "poly": candidate,
                     "x": x,
                     "y": y,
@@ -1514,6 +1516,357 @@ def build_remaining_parts_json(parts, fixed_parts):
 
     return remaining_parts
 
+def build_groups_by_total_square(parts_list):
+    groups = {}
+    circles = []
+
+    for item in parts_list:
+        if item["shape"] == "circle":
+            circles.append(item)
+            continue
+
+        key = item["base_id"]
+        if key not in groups:
+            groups[key] = {
+                "base_id": key,
+                "shape": item["shape"],
+                "items": [],
+                "total_square": 0.0,
+            }
+
+        groups[key]["items"].append(item)
+        groups[key]["total_square"] += item["area"]
+
+    grouped = list(groups.values())
+    grouped.sort(key=lambda g: -g["total_square"])
+    return grouped, circles
+
+
+def layout_quality_score(placed_parts):
+    if not placed_parts:
+        return (0, float("-inf"), float("-inf"))
+
+    units = placed_part_count(placed_parts)
+
+    u = unary_union([p["poly"] for p in placed_parts]).buffer(0)
+    minx, miny, maxx, maxy = u.bounds
+    bbox_area = (maxx - minx) * (maxy - miny)
+    waste = bbox_area - u.area
+
+    return (units, -bbox_area, -waste)
+
+
+def classify_layout_mode(parts_list):
+    circles = [p for p in parts_list if p["shape"] == "circle"]
+    trapezoids = [p for p in parts_list if p["shape"] == "trapezoid"]
+    rectangles = [p for p in parts_list if p["shape"] == "rectangle"]
+    non_circles = [p for p in parts_list if p["shape"] != "circle"]
+
+    trap_base_ids = {p["base_id"] for p in trapezoids}
+
+    if (
+        non_circles
+        and all(p["shape"] == "trapezoid" for p in non_circles)
+        and len(trap_base_ids) == 1
+        and len(trapezoids) >= 6
+    ):
+        return "trapezoid_strip"
+
+    if (
+        circles
+        and len(trapezoids) == 1
+        and trapezoids[0].get("unit_count", 1) == 2
+        and len(rectangles) >= 2
+        and len(non_circles) <= 5
+    ):
+        return "mixed_template"
+
+    return "generic"
+
+
+def infer_mixed_template_roles(parts_list):
+    circles = [p for p in parts_list if p["shape"] == "circle"]
+    trapezoids = [p for p in parts_list if p["shape"] == "trapezoid"]
+
+    remaining = [p for p in parts_list if p["shape"] not in ("circle", "trapezoid")]
+    rect_like = [p for p in remaining if p["shape"] == "rectangle"]
+
+    shelves = sorted(
+        rect_like,
+        key=lambda item: orientation_profile(item, "horizontal")["score"],
+        reverse=True,
+    )
+
+    top_shelf = shelves[0] if len(shelves) >= 1 else None
+    second_shelf = shelves[1] if len(shelves) >= 2 else None
+
+    used = set()
+    if top_shelf is not None:
+        used.add(id(top_shelf))
+    if second_shelf is not None:
+        used.add(id(second_shelf))
+
+    right_bars = []
+    for item in rect_like:
+        if id(item) in used:
+            continue
+        right_bars.append(item)
+
+    right_bars = sorted(
+        right_bars,
+        key=lambda item: orientation_profile(item, "vertical")["score"],
+        reverse=True,
+    )
+
+    fillers = [p for p in remaining if p["shape"] != "rectangle"]
+    fillers = sorted(fillers, key=lambda p: (p["priority"], -p["area"]))
+    trapezoids = sorted(trapezoids, key=lambda p: -p["area"])
+
+    return circles, trapezoids, top_shelf, second_shelf, right_bars, fillers
+
+
+def _place_mixed_template_attempt(parts, parts_list, plate_poly, variant="A"):
+    circles, trapezoids, top_shelf, second_shelf, right_bars, fillers = infer_mixed_template_roles(parts_list)
+
+    placed_parts = []
+
+    def place_shelf(item):
+        if item is None:
+            return
+        prof = orientation_profile(item, "horizontal")
+        cand = place_item_top_left(
+            item=item,
+            placed_parts=placed_parts,
+            plate_poly=plate_poly,
+            preferred_angles=[prof["angle"], 0, 180, 90, 270],
+        )
+        if cand is not None:
+            placed_parts.append(cand)
+
+    def place_right_bars():
+        for item in right_bars:
+            prof = orientation_profile(item, "vertical")
+            ref_bounds = cluster_bounds(placed_parts, plate_poly)
+
+            cand = place_item_near_reference_vertical(
+                item=item,
+                placed_parts=placed_parts,
+                plate_poly=plate_poly,
+                ref_bounds=ref_bounds,
+            )
+
+            if cand is None:
+                cand = place_item_bottom_left(
+                    item=item,
+                    placed_parts=placed_parts,
+                    plate_poly=plate_poly,
+                    preferred_angles=[prof["angle"], 0, 180, 90, 270],
+                )
+
+            if cand is not None:
+                placed_parts.append(cand)
+
+    def place_fillers():
+        for item in fillers:
+            cand = place_item_generic(item, placed_parts, plate_poly)
+            if cand is not None:
+                placed_parts.append(cand)
+
+    if variant == "A":
+        place_shelf(top_shelf)
+        place_shelf(second_shelf)
+
+        placed_parts = place_trapezoids_min_total_space(
+            items=trapezoids,
+            placed_parts=placed_parts,
+            plate_poly=plate_poly,
+        )
+
+        place_right_bars()
+        place_fillers()
+    else:
+        placed_parts = place_trapezoids_min_total_space(
+            items=trapezoids,
+            placed_parts=placed_parts,
+            plate_poly=plate_poly,
+        )
+
+        place_shelf(top_shelf)
+        place_shelf(second_shelf)
+        place_right_bars()
+        place_fillers()
+
+    placed_parts, _ = place_circles_best_pattern(
+        parts=parts,
+        plate_poly=plate_poly,
+        placed_parts=placed_parts,
+        circle_count=len(circles),
+    )
+
+    return placed_parts
+
+
+def place_parts_mixed_template_from_parts_list(parts, parts_list, plate_poly):
+    layout_a = _place_mixed_template_attempt(parts, parts_list, plate_poly, variant="A")
+    layout_b = _place_mixed_template_attempt(parts, parts_list, plate_poly, variant="B")
+
+    score_a = layout_quality_score(layout_a)
+    score_b = layout_quality_score(layout_b)
+
+    print(f"mixed_template variant A score = {score_a}")
+    print(f"mixed_template variant B score = {score_b}")
+
+    return layout_a if score_a >= score_b else layout_b
+
+
+def place_parts_trapezoid_strip_from_parts_list(parts, parts_list, plate_poly):
+    trapezoids = [p for p in parts_list if p["shape"] == "trapezoid"]
+    circles = [p for p in parts_list if p["shape"] == "circle"]
+    others = [p for p in parts_list if p["shape"] not in ("trapezoid", "circle")]
+
+    placed_parts = []
+
+    placed_parts = place_identical_trapezoids_global(
+        items=trapezoids,
+        placed_parts=placed_parts,
+        plate_poly=plate_poly,
+        beam_width=120,
+    )
+
+    for item in others:
+        candidate = place_item_generic(item, placed_parts, plate_poly)
+        if candidate:
+            placed_parts.append(candidate)
+
+    if circles:
+        placed_parts, _ = place_circles_best_pattern(
+            parts=parts,
+            plate_poly=plate_poly,
+            placed_parts=placed_parts,
+            circle_count=len(circles),
+        )
+
+    return placed_parts
+
+
+def place_parts_generic_grouped_from_parts_list(parts, parts_list, plate_poly, strategy=None):
+    strategy = strategy or {}
+
+    groups, circles = build_groups_by_total_square(parts_list)
+
+    group_order = strategy.get("group_order", "default")
+    if group_order == "reverse":
+        groups = list(reversed(groups))
+
+    placed_parts = []
+
+    for group in groups:
+        items = list(group["items"])
+        shape = group["shape"]
+
+        if shape == "trapezoid":
+            items = reorder_items_for_strategy(
+                items,
+                strategy.get("trapezoid_order", "default"),
+            )
+        elif shape == "rectangle":
+            items = reorder_items_for_strategy(
+                items,
+                strategy.get("side_bar_order", "default"),
+            )
+        else:
+            items = reorder_items_for_strategy(
+                items,
+                strategy.get("filler_order", "default"),
+            )
+
+        print(f"Placing group {group['base_id']} shape={shape} total_square={group['total_square']}")
+
+        if shape == "trapezoid":
+            placed_parts = place_trapezoids_min_total_space(
+                items=items,
+                placed_parts=placed_parts,
+                plate_poly=plate_poly,
+            )
+
+        elif shape == "rectangle":
+            for item in items:
+                top_profile = orientation_profile(item, "horizontal")
+                ref_bounds = cluster_bounds(placed_parts, plate_poly)
+
+                candidate = place_item_top_left(
+                    item=item,
+                    placed_parts=placed_parts,
+                    plate_poly=plate_poly,
+                    preferred_angles=strategy.get(
+                        "top_angles",
+                        [top_profile["angle"], 0, 90, 180, 270],
+                    ),
+                )
+
+                if candidate is None:
+                    candidate = place_item_near_reference_vertical(
+                        item=item,
+                        placed_parts=placed_parts,
+                        plate_poly=plate_poly,
+                        ref_bounds=ref_bounds,
+                    )
+
+                if candidate is None:
+                    candidate = place_item_bottom_left(
+                        item=item,
+                        placed_parts=placed_parts,
+                        plate_poly=plate_poly,
+                        preferred_angles=strategy.get(
+                            "side_angles",
+                            [0, 90, 180, 270],
+                        ),
+                    )
+
+                if candidate is not None:
+                    placed_parts.append(candidate)
+                    print(
+                        f"Placed part {candidate['id']} "
+                        f"(shape={candidate['shape']}) "
+                        f"at x={candidate['x']}, y={candidate['y']}, angle={candidate['angle']}"
+                    )
+                else:
+                    print(f"Could not place part {item['id']}, not enough space")
+
+        else:
+            for item in items:
+                candidate = place_item_generic(item, placed_parts, plate_poly)
+
+                if candidate is None:
+                    candidate = place_item_bottom_left(
+                        item=item,
+                        placed_parts=placed_parts,
+                        plate_poly=plate_poly,
+                        preferred_angles=strategy.get(
+                            "filler_angles",
+                            [0, 90, 180, 270],
+                        ),
+                    )
+
+                if candidate is not None:
+                    placed_parts.append(candidate)
+                    print(
+                        f"Placed part {candidate['id']} "
+                        f"(shape={candidate['shape']}) "
+                        f"at x={candidate['x']}, y={candidate['y']}, angle={candidate['angle']}"
+                    )
+                else:
+                    print(f"Could not place part {item['id']}, not enough space")
+
+    placed_parts, _ = place_circles_best_pattern(
+        parts=parts,
+        plate_poly=plate_poly,
+        placed_parts=placed_parts,
+        circle_count=len(circles),
+    )
+
+    return placed_parts
+
 # -----------------------------
 # Main nesting
 # -----------------------------
@@ -1603,118 +1956,17 @@ def nest_parts_with_full_fit(parts, plate_poly, max_rounds=12):
 
 def place_parts_with_existing(parts, plate_poly, strategy=None):
     parts_list = build_parts_list(parts)
-    circles, trapezoids, top_shelf, side_bars, fillers = infer_layout_roles(parts_list)
+    mode = classify_layout_mode(parts_list)
 
-    strategy = strategy or {}
+    print(f"Layout mode: {mode}")
 
-    side_bars = reorder_items_for_strategy(
-        side_bars,
-        strategy.get("side_bar_order", "default"),
-    )
-    trapezoids = reorder_items_for_strategy(
-        trapezoids,
-        strategy.get("trapezoid_order", "default"),
-    )
-    fillers = reorder_items_for_strategy(
-        fillers,
-        strategy.get("filler_order", "default"),
-    )
+    if mode == "mixed_template":
+        return place_parts_mixed_template_from_parts_list(parts, parts_list, plate_poly)
 
-    placed_parts = []
+    if mode == "trapezoid_strip":
+        return place_parts_trapezoid_strip_from_parts_list(parts, parts_list, plate_poly)
 
-    # Step 1: rectangles first -> top shelf
-    if top_shelf:
-        top_profile = orientation_profile(top_shelf, "horizontal")
-        candidate = place_item_top_left(
-            item=top_shelf,
-            placed_parts=placed_parts,
-            plate_poly=plate_poly,
-            preferred_angles=strategy.get(
-                "top_angles",
-                [top_profile["angle"], 0, 90, 180, 270],
-            ),
-        )
-        if candidate:
-            placed_parts.append(candidate)
-            print(
-                f"Placed part {candidate['id']} "
-                f"(shape={candidate['shape']}) "
-                f"at x={candidate['x']}, y={candidate['y']}, angle={candidate['angle']}"
-            )
-
-    # Step 2: remaining rectangles
-    for item in side_bars:
-        side_profile = orientation_profile(item, "vertical")
-        ref_bounds = cluster_bounds(placed_parts, plate_poly)
-
-        candidate = place_item_near_reference_vertical(
-            item=item,
-            placed_parts=placed_parts,
-            plate_poly=plate_poly,
-            ref_bounds=ref_bounds,
-        )
-
-        if candidate is None:
-            candidate = place_item_bottom_left(
-                item=item,
-                placed_parts=placed_parts,
-                plate_poly=plate_poly,
-                preferred_angles=strategy.get(
-                    "side_angles",
-                    [side_profile["angle"], 0, 180, 90, 270],
-                ),
-            )
-
-        if candidate:
-            placed_parts.append(candidate)
-            print(
-                f"Placed part {candidate['id']} "
-                f"(shape={candidate['shape']}) "
-                f"at x={candidate['x']}, y={candidate['y']}, angle={candidate['angle']}"
-            )
-        else:
-            print(f"Could not place part {item['id']}, not enough space")
-
-    # Step 3: trapezoids
-    placed_parts = place_trapezoids_min_total_space(
-        items=trapezoids,
-        placed_parts=placed_parts,
-        plate_poly=plate_poly,
-    )
-
-    # Step 4: fillers
-    for item in fillers:
-        candidate = place_item_generic(item, placed_parts, plate_poly)
-        if candidate is None:
-            candidate = place_item_bottom_left(
-                item=item,
-                placed_parts=placed_parts,
-                plate_poly=plate_poly,
-                preferred_angles=strategy.get(
-                    "filler_angles",
-                    [0, 90, 180, 270],
-                ),
-            )
-
-        if candidate:
-            placed_parts.append(candidate)
-            print(
-                f"Placed part {candidate['id']} "
-                f"(shape={candidate['shape']}) "
-                f"at x={candidate['x']}, y={candidate['y']}, angle={candidate['angle']}"
-            )
-        else:
-            print(f"Could not place part {item['id']}, not enough space")
-
-    # Step 5: circles
-    placed_parts, _ = place_circles_best_pattern(
-        parts=parts,
-        plate_poly=plate_poly,
-        placed_parts=placed_parts,
-        circle_count=sum(1 for p in parts_list if p["shape"] == "circle"),
-    )
-
-    return placed_parts
+    return place_parts_generic_grouped_from_parts_list(parts, parts_list, plate_poly, strategy=strategy)
 
 # -----------------------------
 # Plot arrangement
