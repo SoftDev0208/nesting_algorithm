@@ -25,6 +25,14 @@ FAST_LOOKAHEAD_DEPTH = 3
 FAST_MAX_ROUNDS = 5
 FAST_STRIP_STRATEGIES = 2
 
+def freeze_strategy(strategy):
+    if strategy is None:
+        return None
+    return tuple(sorted((k, tuple(v) if isinstance(v, list) else v) for k, v in strategy.items()))
+
+def freeze_bounds(poly):
+    return tuple(round(v, 6) for v in poly.bounds)
+
 # -----------------------------
 # Load JSON
 # -----------------------------
@@ -335,7 +343,16 @@ def build_parts_list(parts):
 # Collision helpers
 # -----------------------------
 def has_real_overlap(candidate, placed_parts, eps=1e-6):
+    cminx, cminy, cmaxx, cmaxy = candidate.bounds
+
     for p in placed_parts:
+        pminx, pminy, pmaxx, pmaxy = p["poly"].bounds
+
+        if cmaxx <= pminx + eps or pmaxx <= cminx + eps:
+            continue
+        if cmaxy <= pminy + eps or pmaxy <= cminy + eps:
+            continue
+
         if candidate.intersection(p["poly"]).area > eps:
             return True
     return False
@@ -2349,6 +2366,7 @@ def nest_parts_with_full_fit(parts, plate_poly, max_rounds=FAST_MAX_ROUNDS):
 
     best_layout = []
     best_key = (-1, -1.0, float("-inf"))
+    solve_cache = {}
 
     def consider(layout, label):
         nonlocal best_layout, best_key
@@ -2362,25 +2380,23 @@ def nest_parts_with_full_fit(parts, plate_poly, max_rounds=FAST_MAX_ROUNDS):
             best_key = key
             best_layout = layout
 
-    # --------------------------------
-    # 1) Baseline current solver
-    # --------------------------------
-    print(f"\n=== ROUND 1 / {max_rounds} ===")
-    base_layout = place_parts_with_existing(parts, plate_poly)
-    consider(base_layout, "baseline")
+    def is_full(layout):
+        return placed_part_count(layout) == expected
 
-    # --------------------------------
-    # 2) Strip solve after dense group
-    # --------------------------------
+    print(f"\n=== ROUND 1 / {max_rounds} ===")
+    base_layout = place_parts_with_existing(parts, plate_poly, _cache=solve_cache)
+    consider(base_layout, "baseline")
+    if is_full(base_layout):
+        return base_layout
+
     print("\n=== STRIP SOLVE AFTER DENSE GROUP ===")
     strip_layout = solve_remaining_strip_after_dense_group(parts, plate_poly, base_layout)
     consider(strip_layout, "dense-group-strip")
+    if is_full(strip_layout):
+        return strip_layout
 
-    # --------------------------------
-    # 3) Right-circle-strip compaction
-    # --------------------------------
     print("\n=== RIGHT CIRCLE STRIP COMPACTION ===")
-    strip_widths = candidate_right_strip_widths(parts, plate_poly)
+    strip_widths = sorted(set(round(w, 6) for w in candidate_right_strip_widths(parts, plate_poly)))
 
     compact_strategies = [
         {"name": "default"},
@@ -2404,15 +2420,20 @@ def nest_parts_with_full_fit(parts, plate_poly, max_rounds=FAST_MAX_ROUNDS):
         },
     ]
 
+    seen_strip_runs = set()
     for w in strip_widths:
         for strategy in compact_strategies:
+            run_key = (round(w, 6), freeze_strategy(strategy))
+            if run_key in seen_strip_runs:
+                continue
+            seen_strip_runs.add(run_key)
+
             print(f"Trying right strip width={w:.2f}, strategy={strategy.get('name', 'custom')}")
             layout = solve_with_right_circle_strip(parts, plate_poly, w, strategy=strategy)
             consider(layout, f"right-strip-{w:.0f}-{strategy.get('name', 'custom')}")
+            if is_full(layout):
+                return layout
 
-    # --------------------------------
-    # 4) Existing retry loop
-    # --------------------------------
     strategies = [
         {"name": "default"},
         {
@@ -2441,18 +2462,26 @@ def nest_parts_with_full_fit(parts, plate_poly, max_rounds=FAST_MAX_ROUNDS):
         },
     ]
 
-    for round_idx in range(2, max_rounds + 1):
-        strategy = strategies[(round_idx - 2) % len(strategies)]
+    seen_retry_runs = set()
+    unique_strategies = []
+    for s in strategies:
+        key = freeze_strategy(s)
+        if key not in seen_retry_runs:
+            seen_retry_runs.add(key)
+            unique_strategies.append(s)
+
+    for round_idx, strategy in enumerate(unique_strategies[:max_rounds - 1], start=2):
         print(f"\n=== ROUND {round_idx} / {max_rounds} ===")
         print(f"Strategy: {strategy.get('name', 'custom')}")
 
-        layout = place_parts_with_existing(parts, plate_poly, strategy=strategy)
+        layout = place_parts_with_existing(parts, plate_poly, strategy=strategy, _cache=solve_cache)
         consider(layout, f"retry-{strategy.get('name', 'custom')}")
+        if is_full(layout):
+            return layout
 
     best_count = placed_part_count(best_layout)
 
     if best_count == expected:
-        print("All parts placed successfully.")
         return best_layout
 
     raise NestingFailed(
@@ -2462,22 +2491,31 @@ def nest_parts_with_full_fit(parts, plate_poly, max_rounds=FAST_MAX_ROUNDS):
         expected_count=expected,
     )
 
-def place_parts_with_existing(parts, plate_poly, strategy=None):
+def place_parts_with_existing(parts, plate_poly, strategy=None, _cache=None):
+    cache_key = None
+    if _cache is not None:
+        cache_key = (id(parts), freeze_bounds(plate_poly), freeze_strategy(strategy))
+        if cache_key in _cache:
+            return list(_cache[cache_key])
+
     parts_list = build_parts_list(parts)
     mode = classify_layout_mode(parts_list)
 
     print(f"Layout mode: {mode}")
 
     if mode == "trapezoid_strip":
-        return place_parts_trapezoid_strip_from_parts_list(parts, parts_list, plate_poly)
-
-    if mode == "mixed_template":
+        layout = place_parts_trapezoid_strip_from_parts_list(parts, parts_list, plate_poly)
+    elif mode == "mixed_template":
         mixed_layout = place_parts_mixed_template_from_parts_list(parts, parts_list, plate_poly)
         reserved_layout = place_parts_with_reserved_circle_strip(parts, plate_poly, strategy=strategy)
+        layout = mixed_layout if layout_rank_key(mixed_layout) >= layout_rank_key(reserved_layout) else reserved_layout
+    else:
+        layout = place_parts_with_reserved_circle_strip(parts, plate_poly, strategy=strategy)
 
-        return mixed_layout if layout_rank_key(mixed_layout) >= layout_rank_key(reserved_layout) else reserved_layout
+    if _cache is not None:
+        _cache[cache_key] = list(layout)
 
-    return place_parts_with_reserved_circle_strip(parts, plate_poly, strategy=strategy)
+    return layout
 
 # -----------------------------
 # Plot arrangement
