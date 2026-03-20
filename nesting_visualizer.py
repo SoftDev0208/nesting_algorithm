@@ -188,7 +188,7 @@ def combine_trapezoids(poly):
     best_area = float("inf")
     best_union = None
 
-    rotations = [0, 180,]
+    rotations = [0, 180]
 
     for angle1 in rotations:
         for angle2 in rotations:
