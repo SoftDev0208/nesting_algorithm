@@ -25,6 +25,7 @@ FAST_LOOKAHEAD_DEPTH = 3
 FAST_MAX_ROUNDS = 5
 FAST_STRIP_STRATEGIES = 2
 MAX_TRAPEZOID_BEAM = 120
+TRAPEZOID_PAIR_STYLE = "parallelogram_first"
 
 def freeze_strategy(strategy):
     if strategy is None:
@@ -180,10 +181,43 @@ def shape_priority(shape_type):
 # -----------------------------
 # Trapezoid pairing
 # -----------------------------
-def combine_trapezoids(poly):
+def _canonical_trapezoid_vertices(poly, tol=1e-4):
     """
-    Create a compact pair from two trapezoids.
-    Only used when quantity == 2.
+    Return the trapezoid in the canonical order [a, b, c, d] where:
+    - a->b and d->c are the parallel side walls
+    - a and d are the lower endpoints
+    - a is the left wall and d is the right wall
+
+    This matches the user's contour example:
+      [bottom-left, upper-left, upper-right, bottom-right]
+
+    We try both windings and every cyclic shift because Shapely may change the
+    starting vertex and orientation.
+    """
+    coords = list(poly.exterior.coords)[:-1]
+    if len(coords) != 4:
+        return None
+
+    orderings = [coords, list(reversed(coords))]
+
+    for ordered in orderings:
+        for shift in range(4):
+            cand = ordered[shift:] + ordered[:shift]
+            a, b, c, d = cand
+            if not is_parallel(edge_vector(a, b), edge_vector(d, c), tol):
+                continue
+            if b[1] + tol < a[1] or c[1] + tol < d[1]:
+                continue
+            if a[0] > d[0] + tol:
+                continue
+            return [a, b, c, d]
+
+    return None
+
+
+def _combine_trapezoids_fallback(poly):
+    """
+    Preserve the old search-based pairing as a fallback.
     """
     best_area = float("inf")
     best_union = None
@@ -210,6 +244,89 @@ def combine_trapezoids(poly):
                         best_union = combined
 
     return best_union
+
+
+def _rotate_point(pt, angle_rad):
+    x, y = pt
+    ca = math.cos(angle_rad)
+    sa = math.sin(angle_rad)
+    return (x * ca - y * sa, x * sa + y * ca)
+
+
+def _build_sharp_trapezoid_pair(poly):
+    """
+    Build the paired trapezoid unit requested by the user.
+
+    Let the first trapezoid be [a, b, c, d].
+    The second trapezoid is placed as [c1=b, d1, a1, b1=c].
+
+    We therefore compute only:
+      d1 = b + (c - d)
+      a1 = d1 + (d - a)
+
+    The paired outer shell is the parallelogram:
+      [a, d1, a1, d]
+
+    We also keep the two inner trapezoid contours so the plot can show both
+    trapezoids sharply inside the parallelogram.
+    """
+    verts = _canonical_trapezoid_vertices(poly)
+    if verts is None:
+        return None
+
+    a, b, c, d = verts
+    base_angle = math.atan2(d[1] - a[1], d[0] - a[0])
+
+    def to_local(pt):
+        return _rotate_point((pt[0] - a[0], pt[1] - a[1]), -base_angle)
+
+    A, B, C, D = [to_local(pt) for pt in (a, b, c, d)]
+
+    d1 = (B[0] + (C[0] - D[0]), B[1] + (C[1] - D[1]))
+    a1 = (d1[0] + (D[0] - A[0]), d1[1] + (D[1] - A[1]))
+
+    first_local = ShapelyPolygon([A, B, C, D])
+    second_local = ShapelyPolygon([B, d1, a1, C])
+    pair_local = ShapelyPolygon([A, d1, a1, D])
+
+    if not pair_local.is_valid or pair_local.area <= poly.area + 1e-6:
+        return None
+    if not first_local.is_valid or not second_local.is_valid:
+        return None
+
+    pminx, pminy, _, _ = pair_local.bounds
+    offset_x = -pminx
+    offset_y = -pminy
+
+    return {
+        "poly": translate(pair_local, xoff=offset_x, yoff=offset_y),
+        "display_local_polys": [
+            translate(first_local, xoff=offset_x, yoff=offset_y),
+            translate(second_local, xoff=offset_x, yoff=offset_y),
+        ],
+    }
+
+
+def combine_trapezoids(poly, pair_style=None):
+    """
+    Create a compact pair from two trapezoids.
+
+    Modes:
+    - "parallelogram_first": use the computed parallelogram shell first,
+      then fall back to the old search-based pair.
+    - "old_only": skip the parallelogram shell and use only the old pair.
+    """
+    style = pair_style or TRAPEZOID_PAIR_STYLE
+
+    if style != "old_only":
+        sharp_pair = _build_sharp_trapezoid_pair(poly)
+        if sharp_pair is not None:
+            return sharp_pair
+
+    fallback_poly = _combine_trapezoids_fallback(poly)
+    if fallback_poly is None:
+        return None
+    return {"poly": fallback_poly, "display_local_polys": None}
 
 def get_polygon_vertices(poly):
     """
@@ -644,7 +761,9 @@ def build_parts_list(parts):
             if pid not in pair_cache:
                 pair_cache[pid] = combine_trapezoids(poly)
 
-            pair_poly = pair_cache[pid]
+            pair_data = pair_cache[pid]
+            pair_poly = pair_data["poly"] if pair_data is not None else None
+            pair_display = pair_data.get("display_local_polys") if pair_data is not None else None
             pair_count = qty // 2
             remainder = qty % 2
 
@@ -659,6 +778,8 @@ def build_parts_list(parts):
                             "priority": shape_priority("trapezoid"),
                             "area": bounding_area(pair_poly),
                             "unit_count": 2,
+                            "display_local_polys": pair_display,
+                            "source_poly": poly,
                         }
                     )
 
@@ -672,6 +793,7 @@ def build_parts_list(parts):
                             "priority": shape_priority("trapezoid"),
                             "area": bounding_area(poly),
                             "unit_count": 1,
+                            "source_poly": poly,
                         }
                     )
             else:
@@ -685,6 +807,7 @@ def build_parts_list(parts):
                             "priority": shape_priority("trapezoid"),
                             "area": bounding_area(poly),
                             "unit_count": 1,
+                            "source_poly": poly,
                         }
                     )
 
@@ -694,7 +817,9 @@ def build_parts_list(parts):
         if pid not in pair_cache:
             pair_cache[pid] = combine_trapezoids(poly)
 
-        pair_poly = pair_cache[pid]
+        pair_data = pair_cache[pid]
+        pair_poly = pair_data["poly"] if pair_data is not None else None
+        pair_display = pair_data.get("display_local_polys") if pair_data is not None else None
         pair_count = qty // 2
         remainder = qty % 2
 
@@ -709,6 +834,8 @@ def build_parts_list(parts):
                         "priority": shape_priority("trapezoid"),
                         "area": bounding_area(pair_poly),
                         "unit_count": 2,
+                        "display_local_polys": pair_display,
+                        "source_poly": poly,
                     }
                 )
 
@@ -803,6 +930,43 @@ def rotate_normalize(poly, angle):
     return normalize_poly(rotate(poly, angle, origin="centroid", use_radians=False))
 
 
+def get_rotated_display_polys(item, angle):
+    local_polys = item.get("display_local_polys")
+    if not local_polys:
+        return None
+
+    cache = item.setdefault("_display_rot_cache", {})
+    if angle not in cache:
+        base_poly = item["poly"]
+        origin = tuple(base_poly.centroid.coords[0])
+        rotated_base = rotate(base_poly, angle, origin=origin, use_radians=False)
+        minx, miny, _, _ = rotated_base.bounds
+        cache[angle] = [
+            translate(rotate(g, angle, origin=origin, use_radians=False), xoff=-minx, yoff=-miny)
+            for g in local_polys
+        ]
+    return cache[angle]
+
+
+def make_placed_part(item, candidate_poly, x, y, angle):
+    placed = {
+        "id": item["id"],
+        "base_id": item.get("base_id", item["id"]),
+        "unit_count": item.get("unit_count", 1),
+        "poly": candidate_poly,
+        "x": x,
+        "y": y,
+        "angle": angle,
+        "shape": item["shape"],
+    }
+
+    display_local = get_rotated_display_polys(item, angle)
+    if display_local:
+        placed["display_polys"] = [translate(g, xoff=x, yoff=y) for g in display_local]
+
+    return placed
+
+
 def place_item_bottom_left(item, placed_parts, plate_poly, preferred_angles=None):
     if preferred_angles is None:
         preferred_angles = [0, 90]
@@ -821,16 +985,7 @@ def place_item_bottom_left(item, placed_parts, plate_poly, preferred_angles=None
 
             score = (y, x, rw * rh)
             if best is None or score < best_score:
-                best = {
-                    "id": item["id"],
-                    "base_id": item.get("base_id", item["id"]),
-                    "unit_count": item.get("unit_count", 1),
-                    "poly": candidate,
-                    "x": x,
-                    "y": y,
-                    "angle": angle,
-                    "shape": item["shape"],
-                }
+                best = make_placed_part(item, candidate, x, y, angle)
                 best_score = score
 
     return best
@@ -856,16 +1011,7 @@ def place_item_top_left(item, placed_parts, plate_poly, preferred_angles=None):
             minx, miny, maxx, maxy = candidate.bounds
             score = (plate_top - maxy, minx, rw * rh)
             if best is None or score < best_score:
-                best = {
-                    "id": item["id"],
-                    "poly": candidate,
-                    "base_id": item.get("base_id", item["id"]),
-                    "unit_count": item.get("unit_count", 1),
-                    "x": x,
-                    "y": y,
-                    "angle": angle,
-                    "shape": item["shape"],
-                }
+                best = make_placed_part(item, candidate, x, y, angle)
                 best_score = score
 
     return best
@@ -922,16 +1068,7 @@ def place_item_near_reference_vertical(item, placed_parts, plate_poly, ref_bound
             )
 
             if best is None or score < best_score:
-                best = {
-                    "id": item["id"],
-                    "base_id": item.get("base_id", item["id"]),
-                    "unit_count": item.get("unit_count", 1),
-                    "poly": candidate,
-                    "x": x,
-                    "y": y,
-                    "angle": angle,
-                    "shape": item["shape"],
-                }
+                best = make_placed_part(item, candidate, x, y, angle)
                 best_score = score
 
     return best
@@ -996,19 +1133,9 @@ def enumerate_candidate_placements(
             else:
                 local_score = (miny, minx, rw * rh)
 
-            candidates.append(
-                {
-                    "id": item["id"],
-                    "poly": candidate_poly,
-                    "base_id": item.get("base_id", item["id"]),
-                    "unit_count": item.get("unit_count", 1),
-                    "x": x,
-                    "y": y,
-                    "angle": angle,
-                    "shape": item["shape"],
-                    "local_score": local_score,
-                }
-            )
+            cand = make_placed_part(item, candidate_poly, x, y, angle)
+            cand["local_score"] = local_score
+            candidates.append(cand)
 
     candidates.sort(key=lambda c: c["local_score"])
     return candidates[:max_candidates]
@@ -1473,16 +1600,7 @@ def place_item_min_trapezoid_waste(item, placed_parts, plate_poly, current_traps
             score = trapezoid_cluster_score(current_traps, candidate)
 
             if best is None or score < best_score:
-                best = {
-                    "id": item["id"],
-                    "base_id": item.get("base_id", item["id"]),
-                    "unit_count": item.get("unit_count", 1),
-                    "poly": candidate,
-                    "x": x,
-                    "y": y,
-                    "angle": angle,
-                    "shape": item["shape"],
-                }
+                best = make_placed_part(item, candidate, x, y, angle)
                 best_score = score
 
     return best
@@ -1577,53 +1695,85 @@ def place_identical_trapezoids_global(items, placed_parts, plate_poly, beam_widt
     # many trapezoid pairs => one compact lane only
     # --------------------------------------------------
     if pair_mode:
-        best_layout = None
-        best_count = -1
-        best_used_width = float("inf")
+        def _try_pair_lane(poly_template, use_display=True):
+            lane_best_layout = None
+            lane_best_count = -1
+            lane_best_used_width = float("inf")
 
-        for ang in [0, 180]:
-            rp = rotate_normalize(base_poly, ang)
-            rw, rh = poly_size(rp)
+            for ang in [0, 180]:
+                rp = rotate_normalize(poly_template, ang)
+                rw, rh = poly_size(rp)
 
-            if rh > plate_height + 1e-6:
-                continue
+                if rh > plate_height + 1e-6:
+                    continue
 
-            x_cursor = minx
-            layout = list(placed_parts)
-            placed_n = 0
+                pair_pitch = _min_dx_no_overlap(rp, rp, 0.0)
+                if pair_pitch <= 1e-6:
+                    pair_pitch = rw
 
-            for item in items:
-                cand_poly = translate(rp, xoff=x_cursor, yoff=miny)
+                x_cursor = minx
+                right_extent = minx
+                layout = list(placed_parts)
+                placed_n = 0
 
-                if x_cursor + rw > maxx + 1e-6:
-                    break
-                if not plate_poly.covers(cand_poly):
-                    break
-                if has_real_overlap(cand_poly, layout):
-                    break
+                for item in items:
+                    cand_poly = translate(rp, xoff=x_cursor, yoff=miny)
+                    cminx, _, cmaxx, _ = cand_poly.bounds
 
-                layout.append({
-                    "id": item["id"],
-                    "base_id": item.get("base_id", item["id"]),
-                    "unit_count": item.get("unit_count", 1),
-                    "poly": cand_poly,
-                    "x": x_cursor,
-                    "y": miny,
-                    "angle": ang,
-                    "shape": item["shape"],
-                })
-                placed_n += 1
-                x_cursor += rw
+                    if cmaxx > maxx + 1e-6:
+                        break
+                    if cminx < minx - 1e-6:
+                        break
+                    if not plate_poly.covers(cand_poly):
+                        break
+                    if has_real_overlap(cand_poly, layout):
+                        break
 
-            used_width = x_cursor - minx
+                    item_for_place = dict(item)
+                    item_for_place["poly"] = poly_template
+                    if not use_display:
+                        item_for_place.pop("display_local_polys", None)
 
-            if (
-                placed_n > best_count
-                or (placed_n == best_count and used_width < best_used_width)
-            ):
-                best_count = placed_n
-                best_used_width = used_width
-                best_layout = layout
+                    layout.append(make_placed_part(item_for_place, cand_poly, x_cursor, miny, ang))
+                    placed_n += 1
+                    right_extent = max(right_extent, cmaxx)
+                    x_cursor += pair_pitch
+
+                used_width = right_extent - minx
+
+                if (
+                    placed_n > lane_best_count
+                    or (placed_n == lane_best_count and used_width < lane_best_used_width)
+                ):
+                    lane_best_count = placed_n
+                    lane_best_used_width = used_width
+                    lane_best_layout = layout
+
+            return lane_best_layout, lane_best_count, lane_best_used_width
+
+        best_layout, best_count, best_used_width = _try_pair_lane(base_poly, use_display=True)
+
+        need_old_pair_retry = (
+            best_count < len(items)
+            and items
+            and items[0].get("display_local_polys")
+            and items[0].get("source_poly") is not None
+        )
+
+        if need_old_pair_retry:
+            fallback_poly = _combine_trapezoids_fallback(items[0]["source_poly"])
+            if fallback_poly is not None:
+                alt_layout, alt_count, alt_used_width = _try_pair_lane(fallback_poly, use_display=False)
+                if (
+                    alt_layout is not None
+                    and (
+                        alt_count > best_count
+                        or (alt_count == best_count and alt_used_width < best_used_width)
+                    )
+                ):
+                    best_layout = alt_layout
+                    best_count = alt_count
+                    best_used_width = alt_used_width
 
         if best_layout is not None:
             return best_layout
@@ -1735,16 +1885,7 @@ def place_identical_trapezoids_global(items, placed_parts, plate_poly, beam_widt
     for item, (k, x_rel) in zip(items, sol["placements"]):
         x_abs = minx + x_rel
         candidate = translate(cfg[k]["poly"], xoff=x_abs, yoff=cfg[k]["y"])
-        out.append({
-            "id": item["id"],
-            "base_id": item.get("base_id", item["id"]),
-            "unit_count": item.get("unit_count", 1),
-            "poly": candidate,
-            "x": x_abs,
-            "y": cfg[k]["y"],
-            "angle": cfg[k]["angle"],
-            "shape": item["shape"],
-        })
+        out.append(make_placed_part(item, candidate, x_abs, cfg[k]["y"], cfg[k]["angle"]))
 
     return out
 
@@ -2476,18 +2617,7 @@ def place_anchor_band(anchor_choice, remaining_items, placed_parts, region_box):
         if not valid_candidate(poly, placed_parts, band_box):
             continue
 
-        placed_parts.append(
-            {
-                "id": item["id"],
-                "base_id": item.get("base_id", item["id"]),
-                "unit_count": item.get("unit_count", 1),
-                "poly": poly,
-                "x": rminx,
-                "y": y_cursor,
-                "angle": variant["angle"],
-                "shape": item["shape"],
-            }
-        )
+        placed_parts.append(make_placed_part(item, poly, rminx, y_cursor, variant["angle"]))
 
         print(
             f"Placed part {item['id']} "
@@ -3009,129 +3139,157 @@ def place_parts_trapezoid_strip_from_parts_list(parts, parts_list, plate_poly):
 def nest_parts_with_full_fit(parts, plate_poly, max_rounds=FAST_MAX_ROUNDS):
     expected = expected_part_count(parts)
 
-    best_layout = []
-    best_key = (-1, -1.0, float("-inf"))
-    solve_cache = {}
+    global TRAPEZOID_PAIR_STYLE
 
-    def consider(layout, label):
-        nonlocal best_layout, best_key
+    overall_best_layout = []
+    overall_best_key = (-1, -1.0, float("-inf"))
+
+    def consider_overall(layout, label):
+        nonlocal overall_best_layout, overall_best_key
         key = layout_rank_key(layout)
         print(
             f"{label}: placed={placed_part_count(layout)}/{expected}, "
             f"fill_ratio={layout_fill_ratio(layout):.4f}, "
             f"bbox_area={overall_bbox_area(layout):.2f}"
         )
-        if key > best_key:
-            best_key = key
-            best_layout = layout
+        if key > overall_best_key:
+            overall_best_key = key
+            overall_best_layout = layout
 
     def is_full(layout):
         return placed_part_count(layout) == expected
 
-    print(f"\n=== ROUND 1 / {max_rounds} ===")
-    base_layout = place_parts_with_existing(parts, plate_poly, _cache=solve_cache)
-    consider(base_layout, "baseline")
-    if is_full(base_layout):
-        return base_layout
+    def run_full_solver(pair_style, label_prefix):
+        global TRAPEZOID_PAIR_STYLE
+        TRAPEZOID_PAIR_STYLE = pair_style
 
-    print("\n=== STRIP SOLVE AFTER DENSE GROUP ===")
-    strip_layout = solve_remaining_strip_after_dense_group(parts, plate_poly, base_layout)
-    consider(strip_layout, "dense-group-strip")
-    if is_full(strip_layout):
-        return strip_layout
+        best_layout = []
+        best_key = (-1, -1.0, float("-inf"))
+        solve_cache = {}
 
-    print("\n=== RIGHT CIRCLE STRIP COMPACTION ===")
-    strip_widths = sorted(set(round(w, 6) for w in candidate_right_strip_widths(parts, plate_poly)))
+        def consider(layout, label):
+            nonlocal best_layout, best_key
+            key = layout_rank_key(layout)
+            if key > best_key:
+                best_key = key
+                best_layout = layout
+            consider_overall(layout, label)
 
-    compact_strategies = [
-        {"name": "default"},
-        {
-            "name": "reverse_order",
-            "side_bar_order": "reverse",
-            "trapezoid_order": "reverse",
-            "filler_order": "reverse",
-        },
-        {
-            "name": "largest_first_inside_groups",
-            "side_bar_order": "largest_first",
-            "trapezoid_order": "largest_first",
-            "filler_order": "largest_first",
-        },
-        {
-            "name": "rotate_first",
-            "top_angles": [0, 180],
-            "side_angles": [0, 180],
-            "filler_angles": [0, 180],
-        },
-    ]
+        print(f"\n=== {label_prefix}: ROUND 1 / {max_rounds} ===")
+        base_layout = place_parts_with_existing(parts, plate_poly, _cache=solve_cache)
+        consider(base_layout, f"{label_prefix}-baseline")
+        if is_full(base_layout):
+            return base_layout, True
 
-    seen_strip_runs = set()
-    for w in strip_widths:
-        for strategy in compact_strategies:
-            run_key = (round(w, 6), freeze_strategy(strategy))
-            if run_key in seen_strip_runs:
-                continue
-            seen_strip_runs.add(run_key)
+        print(f"\n=== {label_prefix}: STRIP SOLVE AFTER DENSE GROUP ===")
+        strip_layout = solve_remaining_strip_after_dense_group(parts, plate_poly, base_layout)
+        consider(strip_layout, f"{label_prefix}-dense-group-strip")
+        if is_full(strip_layout):
+            return strip_layout, True
 
-            print(f"Trying right strip width={w:.2f}, strategy={strategy.get('name', 'custom')}")
-            layout = solve_with_right_circle_strip(parts, plate_poly, w, strategy=strategy)
-            consider(layout, f"right-strip-{w:.0f}-{strategy.get('name', 'custom')}")
+        print(f"\n=== {label_prefix}: RIGHT CIRCLE STRIP COMPACTION ===")
+        strip_widths = sorted(set(round(w, 6) for w in candidate_right_strip_widths(parts, plate_poly)))
+
+        compact_strategies = [
+            {"name": "default"},
+            {
+                "name": "reverse_order",
+                "side_bar_order": "reverse",
+                "trapezoid_order": "reverse",
+                "filler_order": "reverse",
+            },
+            {
+                "name": "largest_first_inside_groups",
+                "side_bar_order": "largest_first",
+                "trapezoid_order": "largest_first",
+                "filler_order": "largest_first",
+            },
+            {
+                "name": "rotate_first",
+                "top_angles": [0, 180],
+                "side_angles": [0, 180],
+                "filler_angles": [0, 180],
+            },
+        ]
+
+        seen_strip_runs = set()
+        for w in strip_widths:
+            for strategy in compact_strategies:
+                run_key = (round(w, 6), freeze_strategy(strategy))
+                if run_key in seen_strip_runs:
+                    continue
+                seen_strip_runs.add(run_key)
+
+                print(f"Trying {label_prefix} right strip width={w:.2f}, strategy={strategy.get('name', 'custom')}")
+                layout = solve_with_right_circle_strip(parts, plate_poly, w, strategy=strategy)
+                consider(layout, f"{label_prefix}-right-strip-{w:.0f}-{strategy.get('name', 'custom')}")
+                if is_full(layout):
+                    return layout, True
+
+        strategies = [
+            {"name": "default"},
+            {
+                "name": "reverse_order",
+                "side_bar_order": "reverse",
+                "trapezoid_order": "reverse",
+                "filler_order": "reverse",
+            },
+            {
+                "name": "largest_first_inside_groups",
+                "side_bar_order": "largest_first",
+                "trapezoid_order": "largest_first",
+                "filler_order": "largest_first",
+            },
+            {
+                "name": "smallest_first_inside_groups",
+                "side_bar_order": "smallest_first",
+                "trapezoid_order": "smallest_first",
+                "filler_order": "smallest_first",
+            },
+            {
+                "name": "rotate_first",
+                "top_angles": [0, 90],
+                "side_angles": [0, 90],
+                "filler_angles": [0, 90],
+            },
+        ]
+
+        seen_retry_runs = set()
+        unique_strategies = []
+        for s in strategies:
+            key = freeze_strategy(s)
+            if key not in seen_retry_runs:
+                seen_retry_runs.add(key)
+                unique_strategies.append(s)
+
+        for round_idx, strategy in enumerate(unique_strategies[:max_rounds - 1], start=2):
+            print(f"\n=== {label_prefix}: ROUND {round_idx} / {max_rounds} ===")
+            print(f"Strategy: {strategy.get('name', 'custom')}")
+
+            layout = place_parts_with_existing(parts, plate_poly, strategy=strategy, _cache=solve_cache)
+            consider(layout, f"{label_prefix}-retry-{strategy.get('name', 'custom')}")
             if is_full(layout):
-                return layout
+                return layout, True
 
-    strategies = [
-        {"name": "default"},
-        {
-            "name": "reverse_order",
-            "side_bar_order": "reverse",
-            "trapezoid_order": "reverse",
-            "filler_order": "reverse",
-        },
-        {
-            "name": "largest_first_inside_groups",
-            "side_bar_order": "largest_first",
-            "trapezoid_order": "largest_first",
-            "filler_order": "largest_first",
-        },
-        {
-            "name": "smallest_first_inside_groups",
-            "side_bar_order": "smallest_first",
-            "trapezoid_order": "smallest_first",
-            "filler_order": "smallest_first",
-        },
-        {
-            "name": "rotate_first",
-            "top_angles": [0, 90],
-            "side_angles": [0, 90],
-            "filler_angles": [0, 90],
-        },
-    ]
+        return best_layout, False
 
-    seen_retry_runs = set()
-    unique_strategies = []
-    for s in strategies:
-        key = freeze_strategy(s)
-        if key not in seen_retry_runs:
-            seen_retry_runs.add(key)
-            unique_strategies.append(s)
+    layout, full = run_full_solver("parallelogram_first", "PARALLELOGRAM-PAIR")
+    if full:
+        return layout
 
-    for round_idx, strategy in enumerate(unique_strategies[:max_rounds - 1], start=2):
-        print(f"\n=== ROUND {round_idx} / {max_rounds} ===")
-        print(f"Strategy: {strategy.get('name', 'custom')}")
+    print("\n=== FULL RETRY WITH OLD TRAPEZOID PAIRING ===")
+    old_layout, old_full = run_full_solver("old_only", "OLD-PAIR")
+    if old_full:
+        return old_layout
 
-        layout = place_parts_with_existing(parts, plate_poly, strategy=strategy, _cache=solve_cache)
-        consider(layout, f"retry-{strategy.get('name', 'custom')}")
-        if is_full(layout):
-            return layout
-
-    best_count = placed_part_count(best_layout)
+    best_count = placed_part_count(overall_best_layout)
 
     if best_count == expected:
-        return best_layout
+        return overall_best_layout
 
     raise NestingFailed(
         f"Could not place all parts. Best result was {best_count}/{expected}.",
-        best_layout=best_layout,
+        best_layout=overall_best_layout,
         best_count=best_count,
         expected_count=expected,
     )
@@ -3139,7 +3297,7 @@ def nest_parts_with_full_fit(parts, plate_poly, max_rounds=FAST_MAX_ROUNDS):
 def place_parts_with_existing(parts, plate_poly, strategy=None, _cache=None):
     cache_key = None
     if _cache is not None:
-        cache_key = (id(parts), freeze_bounds(plate_poly), freeze_strategy(strategy))
+        cache_key = (id(parts), freeze_bounds(plate_poly), freeze_strategy(strategy), TRAPEZOID_PAIR_STYLE)
         if cache_key in _cache:
             return list(_cache[cache_key])
 
@@ -3189,16 +3347,20 @@ def plot_arrangement(placed_parts, plate_poly):
             xs, ys = g.exterior.xy
             ax.plot(xs, ys, "b")
 
-            c = g.centroid
-            ax.text(
-                c.x,
-                c.y,
-                str(p["id"]),
-                ha="center",
-                va="center",
-                fontsize=8,
-                color="green",
-            )
+        for g in p.get("display_polys", []) or []:
+            xs, ys = g.exterior.xy
+            ax.plot(xs, ys, "black")
+
+        c = poly.centroid
+        ax.text(
+            c.x,
+            c.y,
+            str(p["id"]),
+            ha="center",
+            va="center",
+            fontsize=8,
+            color="green",
+        )
 
     ax.set_title("Layout Filled According to Geometry-Role Template")
     plt.xlabel("X")

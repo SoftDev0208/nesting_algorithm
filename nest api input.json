@@ -1,0 +1,1122 @@
+{
+	"options" : 
+	{
+		"BottomDist" : 5.0,
+		"CarryArc" : false,
+		"ComAngle" : 90.0,
+		"CombinFirst" : true,
+		"CombineMinLength" : 5.0,
+		"CombineMode" : 1,
+		"Compensation" : 0.0,
+		"CutNumbers" : 1,
+		"LeftDist" : 5.0,
+		"Mode" : 2,
+		"Nozzels" : 1,
+		"PartGap" : 2.0,
+		"RightDist" : 5.0,
+		"TopDist" : 5.0
+	},
+	"parts" : 
+	[
+		{
+			"basepoint" : 
+			{
+				"angle1" : 0.0,
+				"angle2" : 0.0,
+				"radius" : 0.0,
+				"x" : 0.0,
+				"y" : 0.0
+			},
+			"contours" : 
+			[
+				{
+					"bclose" : true,
+					"points" : 
+					[
+						{
+							"angle1" : 0.0,
+							"angle2" : 0.0,
+							"radius" : 0.0,
+							"x" : 0.0,
+							"y" : 0.0
+						},
+						{
+							"angle1" : 0.0,
+							"angle2" : 0.0,
+							"radius" : 0.0,
+							"x" : 0.0,
+							"y" : 285.0
+						},
+						{
+							"angle1" : 0.0,
+							"angle2" : 0.0,
+							"radius" : 0.0,
+							"x" : 1790.0,
+							"y" : 285.0
+						},
+						{
+							"angle1" : 0.0,
+							"angle2" : 0.0,
+							"radius" : 0.0,
+							"x" : 1790.0,
+							"y" : 0.0
+						}
+					]
+				}
+			],
+			"id" : "1",
+			"marks" : "",
+			"partinfs" : 
+			{
+				"canmirror" : "0",
+				"priority" : "50",
+				"rotation" : "1"
+			},
+			"quantity" : 4,
+			"unclosedcutlines" : ""
+		},
+		{
+			"basepoint" : 
+			{
+				"angle1" : 0.0,
+				"angle2" : 0.0,
+				"radius" : 0.0,
+				"x" : 0.0,
+				"y" : 0.0
+			},
+			"contours" : 
+			[
+				{
+					"bclose" : true,
+					"points" : 
+					[
+						{
+							"angle1" : 0.0,
+							"angle2" : 0.0,
+							"radius" : 0.0,
+							"x" : 0.0,
+							"y" : 20.0
+						},
+						{
+							"angle1" : 0.0,
+							"angle2" : 0.0,
+							"radius" : 0.0,
+							"x" : 0.0,
+							"y" : 195.0
+						},
+						{
+							"angle1" : 0.0,
+							"angle2" : 0.0,
+							"radius" : 0.0,
+							"x" : 1053.5699999999999,
+							"y" : 195.0
+						},
+						{
+							"angle1" : 0.0,
+							"angle2" : 0.0,
+							"radius" : 0.0,
+							"x" : 1053.5699999999999,
+							"y" : 20.0
+						},
+						{
+							"angle1" : 0.0,
+							"angle2" : 0.0,
+							"radius" : 0.0,
+							"x" : 1033.5699999999999,
+							"y" : 0.0
+						},
+						{
+							"angle1" : 0.0,
+							"angle2" : 0.0,
+							"radius" : 0.0,
+							"x" : 20.0,
+							"y" : 0.0
+						}
+					]
+				}
+			],
+			"id" : "2",
+			"marks" : "",
+			"partinfs" : 
+			{
+				"canmirror" : "0",
+				"priority" : "50",
+				"rotation" : "1"
+			},
+			"quantity" : 1,
+			"unclosedcutlines" : ""
+		},
+		{
+			"basepoint" : 
+			{
+				"angle1" : 0.0,
+				"angle2" : 0.0,
+				"radius" : 0.0,
+				"x" : 0.0,
+				"y" : 0.0
+			},
+			"contours" : 
+			[
+				{
+					"bclose" : true,
+					"points" : 
+					[
+						{
+							"angle1" : 0.0,
+							"angle2" : 0.0,
+							"radius" : 0.0,
+							"x" : 0.0,
+							"y" : 20.0
+						},
+						{
+							"angle1" : 0.0,
+							"angle2" : 0.0,
+							"radius" : 0.0,
+							"x" : 20.0,
+							"y" : 0.0
+						},
+						{
+							"angle1" : 0.0,
+							"angle2" : 0.0,
+							"radius" : 0.0,
+							"x" : 828.92999999999995,
+							"y" : 0.0
+						},
+						{
+							"angle1" : 0.0,
+							"angle2" : 0.0,
+							"radius" : 0.0,
+							"x" : 848.92999999999995,
+							"y" : 20.0
+						},
+						{
+							"angle1" : 0.0,
+							"angle2" : 0.0,
+							"radius" : 0.0,
+							"x" : 848.92999999999995,
+							"y" : 146.0
+						},
+						{
+							"angle1" : 0.0,
+							"angle2" : 0.0,
+							"radius" : 0.0,
+							"x" : 0.0,
+							"y" : 146.0
+						}
+					]
+				}
+			],
+			"id" : "3",
+			"marks" : "",
+			"partinfs" : 
+			{
+				"canmirror" : "0",
+				"priority" : "50",
+				"rotation" : "1"
+			},
+			"quantity" : 1,
+			"unclosedcutlines" : ""
+		},
+		{
+			"basepoint" : 
+			{
+				"angle1" : 0.0,
+				"angle2" : 0.0,
+				"radius" : 0.0,
+				"x" : 0.0,
+				"y" : 0.0
+			},
+			"contours" : 
+			[
+				{
+					"bclose" : true,
+					"points" : 
+					[
+						{
+							"angle1" : 0.0,
+							"angle2" : 0.0,
+							"radius" : 0.0,
+							"x" : 0.0,
+							"y" : 20.0
+						},
+						{
+							"angle1" : 0.0,
+							"angle2" : 0.0,
+							"radius" : 0.0,
+							"x" : 20.0,
+							"y" : 0.0
+						},
+						{
+							"angle1" : 0.0,
+							"angle2" : 0.0,
+							"radius" : 0.0,
+							"x" : 858.34000000000003,
+							"y" : 0.0
+						},
+						{
+							"angle1" : 0.0,
+							"angle2" : 0.0,
+							"radius" : 0.0,
+							"x" : 878.34000000000003,
+							"y" : 20.0
+						},
+						{
+							"angle1" : 0.0,
+							"angle2" : 0.0,
+							"radius" : 0.0,
+							"x" : 878.34000000000003,
+							"y" : 146.0
+						},
+						{
+							"angle1" : 0.0,
+							"angle2" : 0.0,
+							"radius" : 0.0,
+							"x" : 0.0,
+							"y" : 146.0
+						}
+					]
+				}
+			],
+			"id" : "4",
+			"marks" : "",
+			"partinfs" : 
+			{
+				"canmirror" : "0",
+				"priority" : "50",
+				"rotation" : "1"
+			},
+			"quantity" : 17,
+			"unclosedcutlines" : ""
+		},
+		{
+			"basepoint" : 
+			{
+				"angle1" : 0.0,
+				"angle2" : 0.0,
+				"radius" : 0.0,
+				"x" : 0.0,
+				"y" : 0.0
+			},
+			"contours" : 
+			[
+				{
+					"bclose" : true,
+					"points" : 
+					[
+						{
+							"angle1" : 0.0,
+							"angle2" : 0.0,
+							"radius" : 0.0,
+							"x" : 0.0,
+							"y" : 0.0
+						},
+						{
+							"angle1" : 0.0,
+							"angle2" : 0.0,
+							"radius" : 0.0,
+							"x" : 0.0,
+							"y" : 285.0
+						},
+						{
+							"angle1" : 0.0,
+							"angle2" : 0.0,
+							"radius" : 0.0,
+							"x" : 1790.0,
+							"y" : 285.0
+						},
+						{
+							"angle1" : 0.0,
+							"angle2" : 0.0,
+							"radius" : 0.0,
+							"x" : 1790.0,
+							"y" : 0.0
+						}
+					]
+				}
+			],
+			"id" : "5",
+			"marks" : "",
+			"partinfs" : 
+			{
+				"canmirror" : "0",
+				"priority" : "50",
+				"rotation" : "1"
+			},
+			"quantity" : 30,
+			"unclosedcutlines" : ""
+		},
+		{
+			"basepoint" : 
+			{
+				"angle1" : 0.0,
+				"angle2" : 0.0,
+				"radius" : 0.0,
+				"x" : 0.0,
+				"y" : 0.0
+			},
+			"contours" : 
+			[
+				{
+					"bclose" : true,
+					"points" : 
+					[
+						{
+							"angle1" : 0.0,
+							"angle2" : 0.0,
+							"radius" : 0.0,
+							"x" : 0.0,
+							"y" : 0.0
+						},
+						{
+							"angle1" : 0.0,
+							"angle2" : 0.0,
+							"radius" : 0.0,
+							"x" : 110.56999999999999,
+							"y" : 589.72000000000003
+						},
+						{
+							"angle1" : 0.0,
+							"angle2" : 0.0,
+							"radius" : 0.0,
+							"x" : 869.23000000000002,
+							"y" : 294.86000000000001
+						},
+						{
+							"angle1" : 0.0,
+							"angle2" : 0.0,
+							"radius" : 0.0,
+							"x" : 813.94000000000005,
+							"y" : 0.0
+						}
+					]
+				}
+			],
+			"id" : "6",
+			"marks" : "",
+			"partinfs" : 
+			{
+				"canmirror" : "0",
+				"priority" : "50",
+				"rotation" : "1"
+			},
+			"quantity" : 24,
+			"unclosedcutlines" : ""
+		},
+		{
+			"basepoint" : 
+			{
+				"angle1" : 0.0,
+				"angle2" : 0.0,
+				"radius" : 0.0,
+				"x" : 0.0,
+				"y" : 0.0
+			},
+			"contours" : 
+			[
+				{
+					"bclose" : true,
+					"points" : 
+					[
+						{
+							"angle1" : 0.0,
+							"angle2" : 0.0,
+							"radius" : 0.0,
+							"x" : 0.0,
+							"y" : 20.0
+						},
+						{
+							"angle1" : 0.0,
+							"angle2" : 0.0,
+							"radius" : 0.0,
+							"x" : 20.0,
+							"y" : 0.0
+						},
+						{
+							"angle1" : 0.0,
+							"angle2" : 0.0,
+							"radius" : 0.0,
+							"x" : 1033.1700000000001,
+							"y" : 0.0
+						},
+						{
+							"angle1" : 0.0,
+							"angle2" : 0.0,
+							"radius" : 0.0,
+							"x" : 1053.1700000000001,
+							"y" : 20.0
+						},
+						{
+							"angle1" : 0.0,
+							"angle2" : 0.0,
+							"radius" : 0.0,
+							"x" : 1053.1700000000001,
+							"y" : 186.0
+						},
+						{
+							"angle1" : 0.0,
+							"angle2" : 0.0,
+							"radius" : 0.0,
+							"x" : 0.0,
+							"y" : 186.0
+						}
+					]
+				}
+			],
+			"id" : "7",
+			"marks" : "",
+			"partinfs" : 
+			{
+				"canmirror" : "0",
+				"priority" : "50",
+				"rotation" : "1"
+			},
+			"quantity" : 17,
+			"unclosedcutlines" : ""
+		},
+		{
+			"basepoint" : 
+			{
+				"angle1" : 0.0,
+				"angle2" : 0.0,
+				"radius" : 0.0,
+				"x" : 0.0,
+				"y" : 0.0
+			},
+			"contours" : 
+			[
+				{
+					"bclose" : true,
+					"points" : 
+					[
+						{
+							"angle1" : 0,
+							"angle2" : 6.2831852000000001,
+							"radius" : 100.0,
+							"x" : 100.0,
+							"y" : 100.0
+						}
+					]
+				}
+			],
+			"id" : "8",
+			"marks" : "",
+			"partinfs" : 
+			{
+				"canmirror" : "0",
+				"priority" : "50",
+				"rotation" : "1"
+			},
+			"quantity" : 50,
+			"unclosedcutlines" : ""
+		}
+	],
+	"plates" : 
+	[
+		{
+			"contours" : 
+			[
+				{
+					"bclose" : true,
+					"points" : 
+					[
+						{
+							"angle1" : 0.0,
+							"angle2" : 0.0,
+							"radius" : 0.0,
+							"x" : 0.0,
+							"y" : -0.0
+						},
+						{
+							"angle1" : 0.0,
+							"angle2" : 0.0,
+							"radius" : 0.0,
+							"x" : 0.0,
+							"y" : -1500.0
+						},
+						{
+							"angle1" : 0.0,
+							"angle2" : 0.0,
+							"radius" : 0.0,
+							"x" : 12000.0,
+							"y" : -1500.0
+						},
+						{
+							"angle1" : 0.0,
+							"angle2" : 0.0,
+							"radius" : 0.0,
+							"x" : 12000.0,
+							"y" : -0.0
+						}
+					]
+				}
+			],
+			"guid" : "6DD995E2-4BD9-452f-BEE3-FE2638876F6F",
+			"id" : "1",
+			"partinfs" : "",
+			"quantity" : 10
+		},
+		{
+			"contours" : 
+			[
+				{
+					"bclose" : true,
+					"points" : 
+					[
+						{
+							"angle1" : 0.0,
+							"angle2" : 0.0,
+							"radius" : 0.0,
+							"x" : 0.0,
+							"y" : -0.0
+						},
+						{
+							"angle1" : 0.0,
+							"angle2" : 0.0,
+							"radius" : 0.0,
+							"x" : 0.0,
+							"y" : -1500.0
+						},
+						{
+							"angle1" : 0.0,
+							"angle2" : 0.0,
+							"radius" : 0.0,
+							"x" : 12000.0,
+							"y" : -1500.0
+						},
+						{
+							"angle1" : 0.0,
+							"angle2" : 0.0,
+							"radius" : 0.0,
+							"x" : 12000.0,
+							"y" : -0.0
+						}
+					]
+				}
+			],
+			"guid" : "DD69FA87-775E-458c-AFFD-30FCA42B90C3",
+			"id" : "2",
+			"partinfs" : "",
+			"quantity" : 10
+		},
+		{
+			"contours" : 
+			[
+				{
+					"bclose" : true,
+					"points" : 
+					[
+						{
+							"angle1" : 0.0,
+							"angle2" : 0.0,
+							"radius" : 0.0,
+							"x" : 0.0,
+							"y" : -0.0
+						},
+						{
+							"angle1" : 0.0,
+							"angle2" : 0.0,
+							"radius" : 0.0,
+							"x" : 0.0,
+							"y" : -1500.0
+						},
+						{
+							"angle1" : 0.0,
+							"angle2" : 0.0,
+							"radius" : 0.0,
+							"x" : 12000.0,
+							"y" : -1500.0
+						},
+						{
+							"angle1" : 0.0,
+							"angle2" : 0.0,
+							"radius" : 0.0,
+							"x" : 12000.0,
+							"y" : -0.0
+						}
+					]
+				}
+			],
+			"guid" : "664CFA70-C8C6-4bea-8752-E0615F3991DF",
+			"id" : "3",
+			"partinfs" : "",
+			"quantity" : 10
+		},
+		{
+			"contours" : 
+			[
+				{
+					"bclose" : true,
+					"points" : 
+					[
+						{
+							"angle1" : 0.0,
+							"angle2" : 0.0,
+							"radius" : 0.0,
+							"x" : 0.0,
+							"y" : -0.0
+						},
+						{
+							"angle1" : 0.0,
+							"angle2" : 0.0,
+							"radius" : 0.0,
+							"x" : 0.0,
+							"y" : -1500.0
+						},
+						{
+							"angle1" : 0.0,
+							"angle2" : 0.0,
+							"radius" : 0.0,
+							"x" : 12000.0,
+							"y" : -1500.0
+						},
+						{
+							"angle1" : 0.0,
+							"angle2" : 0.0,
+							"radius" : 0.0,
+							"x" : 12000.0,
+							"y" : -0.0
+						}
+					]
+				}
+			],
+			"guid" : "32C142CB-A5B0-46ad-92A5-51EE9FA4131B",
+			"id" : "4",
+			"partinfs" : "",
+			"quantity" : 10
+		},
+		{
+			"contours" : 
+			[
+				{
+					"bclose" : true,
+					"points" : 
+					[
+						{
+							"angle1" : 0.0,
+							"angle2" : 0.0,
+							"radius" : 0.0,
+							"x" : 0.0,
+							"y" : -0.0
+						},
+						{
+							"angle1" : 0.0,
+							"angle2" : 0.0,
+							"radius" : 0.0,
+							"x" : 0.0,
+							"y" : -1500.0
+						},
+						{
+							"angle1" : 0.0,
+							"angle2" : 0.0,
+							"radius" : 0.0,
+							"x" : 12000.0,
+							"y" : -1500.0
+						},
+						{
+							"angle1" : 0.0,
+							"angle2" : 0.0,
+							"radius" : 0.0,
+							"x" : 12000.0,
+							"y" : -0.0
+						}
+					]
+				}
+			],
+			"guid" : "CFAEAEDA-0C69-494e-A72D-351214AD207C",
+			"id" : "5",
+			"partinfs" : "",
+			"quantity" : 10
+		},
+		{
+			"contours" : 
+			[
+				{
+					"bclose" : true,
+					"points" : 
+					[
+						{
+							"angle1" : 0.0,
+							"angle2" : 0.0,
+							"radius" : 0.0,
+							"x" : 0.0,
+							"y" : -0.0
+						},
+						{
+							"angle1" : 0.0,
+							"angle2" : 0.0,
+							"radius" : 0.0,
+							"x" : 0.0,
+							"y" : -1500.0
+						},
+						{
+							"angle1" : 0.0,
+							"angle2" : 0.0,
+							"radius" : 0.0,
+							"x" : 12000.0,
+							"y" : -1500.0
+						},
+						{
+							"angle1" : 0.0,
+							"angle2" : 0.0,
+							"radius" : 0.0,
+							"x" : 12000.0,
+							"y" : -0.0
+						}
+					]
+				}
+			],
+			"guid" : "9C9B11B8-6E47-45ab-8AF9-F2357187ECD0",
+			"id" : "6",
+			"partinfs" : "",
+			"quantity" : 10
+		},
+		{
+			"contours" : 
+			[
+				{
+					"bclose" : true,
+					"points" : 
+					[
+						{
+							"angle1" : 0.0,
+							"angle2" : 0.0,
+							"radius" : 0.0,
+							"x" : 0.0,
+							"y" : -0.0
+						},
+						{
+							"angle1" : 0.0,
+							"angle2" : 0.0,
+							"radius" : 0.0,
+							"x" : 0.0,
+							"y" : -1500.0
+						},
+						{
+							"angle1" : 0.0,
+							"angle2" : 0.0,
+							"radius" : 0.0,
+							"x" : 12000.0,
+							"y" : -1500.0
+						},
+						{
+							"angle1" : 0.0,
+							"angle2" : 0.0,
+							"radius" : 0.0,
+							"x" : 12000.0,
+							"y" : -0.0
+						}
+					]
+				}
+			],
+			"guid" : "70CFBA4C-199F-44d4-A5FD-99CA60469B14",
+			"id" : "7",
+			"partinfs" : "",
+			"quantity" : 2
+		},
+		{
+			"contours" : 
+			[
+				{
+					"bclose" : true,
+					"points" : 
+					[
+						{
+							"angle1" : 0.0,
+							"angle2" : 0.0,
+							"radius" : 0.0,
+							"x" : 0.0,
+							"y" : -0.0
+						},
+						{
+							"angle1" : 0.0,
+							"angle2" : 0.0,
+							"radius" : 0.0,
+							"x" : 0.0,
+							"y" : -1500.0
+						},
+						{
+							"angle1" : 0.0,
+							"angle2" : 0.0,
+							"radius" : 0.0,
+							"x" : 12000.0,
+							"y" : -1500.0
+						},
+						{
+							"angle1" : 0.0,
+							"angle2" : 0.0,
+							"radius" : 0.0,
+							"x" : 12000.0,
+							"y" : -0.0
+						}
+					]
+				}
+			],
+			"guid" : "FDB07EEF-7325-4bef-B0EA-8C178C8D2237",
+			"id" : "8",
+			"partinfs" : "",
+			"quantity" : 3
+		},
+		{
+			"contours" : 
+			[
+				{
+					"bclose" : true,
+					"points" : 
+					[
+						{
+							"angle1" : 0.0,
+							"angle2" : 0.0,
+							"radius" : 0.0,
+							"x" : 0.0,
+							"y" : -0.0
+						},
+						{
+							"angle1" : 0.0,
+							"angle2" : 0.0,
+							"radius" : 0.0,
+							"x" : 0.0,
+							"y" : -1500.0
+						},
+						{
+							"angle1" : 0.0,
+							"angle2" : 0.0,
+							"radius" : 0.0,
+							"x" : 12000.0,
+							"y" : -1500.0
+						},
+						{
+							"angle1" : 0.0,
+							"angle2" : 0.0,
+							"radius" : 0.0,
+							"x" : 12000.0,
+							"y" : -0.0
+						}
+					]
+				}
+			],
+			"guid" : "8CF5F4FC-19B6-4dc7-A4B5-468472CFBE30",
+			"id" : "9",
+			"partinfs" : "",
+			"quantity" : 3
+		},
+		{
+			"contours" : 
+			[
+				{
+					"bclose" : true,
+					"points" : 
+					[
+						{
+							"angle1" : 0.0,
+							"angle2" : 0.0,
+							"radius" : 0.0,
+							"x" : 0.0,
+							"y" : -0.0
+						},
+						{
+							"angle1" : 0.0,
+							"angle2" : 0.0,
+							"radius" : 0.0,
+							"x" : 0.0,
+							"y" : -1500.0
+						},
+						{
+							"angle1" : 0.0,
+							"angle2" : 0.0,
+							"radius" : 0.0,
+							"x" : 12000.0,
+							"y" : -1500.0
+						},
+						{
+							"angle1" : 0.0,
+							"angle2" : 0.0,
+							"radius" : 0.0,
+							"x" : 12000.0,
+							"y" : -0.0
+						}
+					]
+				}
+			],
+			"guid" : "4F2A1FD5-D13E-4e80-9A1E-12F5416E80CE",
+			"id" : "10",
+			"partinfs" : "",
+			"quantity" : 3
+		},
+		{
+			"contours" : 
+			[
+				{
+					"bclose" : true,
+					"points" : 
+					[
+						{
+							"angle1" : 0.0,
+							"angle2" : 0.0,
+							"radius" : 0.0,
+							"x" : 0.0,
+							"y" : -0.0
+						},
+						{
+							"angle1" : 0.0,
+							"angle2" : 0.0,
+							"radius" : 0.0,
+							"x" : 0.0,
+							"y" : -1500.0
+						},
+						{
+							"angle1" : 0.0,
+							"angle2" : 0.0,
+							"radius" : 0.0,
+							"x" : 12000.0,
+							"y" : -1500.0
+						},
+						{
+							"angle1" : 0.0,
+							"angle2" : 0.0,
+							"radius" : 0.0,
+							"x" : 12000.0,
+							"y" : -0.0
+						}
+					]
+				}
+			],
+			"guid" : "8FF64611-7D7B-45c4-B909-25A7BD03591F",
+			"id" : "11",
+			"partinfs" : "",
+			"quantity" : 3
+		},
+		{
+			"contours" : 
+			[
+				{
+					"bclose" : true,
+					"points" : 
+					[
+						{
+							"angle1" : 0.0,
+							"angle2" : 0.0,
+							"radius" : 0.0,
+							"x" : 0.0,
+							"y" : -0.0
+						},
+						{
+							"angle1" : 0.0,
+							"angle2" : 0.0,
+							"radius" : 0.0,
+							"x" : 0.0,
+							"y" : -1500.0
+						},
+						{
+							"angle1" : 0.0,
+							"angle2" : 0.0,
+							"radius" : 0.0,
+							"x" : 12000.0,
+							"y" : -1500.0
+						},
+						{
+							"angle1" : 0.0,
+							"angle2" : 0.0,
+							"radius" : 0.0,
+							"x" : 12000.0,
+							"y" : -0.0
+						}
+					]
+				}
+			],
+			"guid" : "3F150D32-399D-46af-A6C8-F7D8D8A752D9",
+			"id" : "12",
+			"partinfs" : "",
+			"quantity" : 3
+		},
+		{
+			"contours" : 
+			[
+				{
+					"bclose" : true,
+					"points" : 
+					[
+						{
+							"angle1" : 0.0,
+							"angle2" : 0.0,
+							"radius" : 0.0,
+							"x" : 0.0,
+							"y" : -0.0
+						},
+						{
+							"angle1" : 0.0,
+							"angle2" : 0.0,
+							"radius" : 0.0,
+							"x" : 0.0,
+							"y" : -1500.0
+						},
+						{
+							"angle1" : 0.0,
+							"angle2" : 0.0,
+							"radius" : 0.0,
+							"x" : 12000.0,
+							"y" : -1500.0
+						},
+						{
+							"angle1" : 0.0,
+							"angle2" : 0.0,
+							"radius" : 0.0,
+							"x" : 12000.0,
+							"y" : -0.0
+						}
+					]
+				}
+			],
+			"guid" : "C3C637C5-8C8F-478f-A1FF-C0182749AC0B",
+			"id" : "13",
+			"partinfs" : "",
+			"quantity" : 3
+		},
+		{
+			"contours" : 
+			[
+				{
+					"bclose" : true,
+					"points" : 
+					[
+						{
+							"angle1" : 0.0,
+							"angle2" : 0.0,
+							"radius" : 0.0,
+							"x" : 0.0,
+							"y" : -0.0
+						},
+						{
+							"angle1" : 0.0,
+							"angle2" : 0.0,
+							"radius" : 0.0,
+							"x" : 0.0,
+							"y" : -1500.0
+						},
+						{
+							"angle1" : 0.0,
+							"angle2" : 0.0,
+							"radius" : 0.0,
+							"x" : 12000.0,
+							"y" : -1500.0
+						},
+						{
+							"angle1" : 0.0,
+							"angle2" : 0.0,
+							"radius" : 0.0,
+							"x" : 12000.0,
+							"y" : -0.0
+						}
+					]
+				}
+			],
+			"guid" : "40E13489-012E-4c6c-9DCE-884006A446EA",
+			"id" : "14",
+			"partinfs" : "",
+			"quantity" : 3
+		}
+	]
+}
+
+
+
+
