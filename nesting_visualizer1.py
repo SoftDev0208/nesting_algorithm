@@ -1,6 +1,11 @@
 import json
 import math
+import queue
+import threading
+import traceback
 import tkinter as tk
+from collections import deque
+from dataclasses import dataclass
 from tkinter import filedialog, messagebox, ttk
 
 import matplotlib.pyplot as plt
@@ -19,14 +24,20 @@ class NestingFailed(Exception):
         self.best_count = best_count
         self.expected_count = expected_count
 
-FAST_PAIR_GRID_STEPS = 18
-FAST_CIRCLE_PHASE_SAMPLES = 40
-FAST_BRANCH_CANDIDATES = 10
-FAST_LOOKAHEAD_DEPTH = 3
+FAST_PAIR_GRID_STEPS = 9#18
+FAST_CIRCLE_PHASE_SAMPLES = 20 #40
+FAST_BRANCH_CANDIDATES =  5 #10
+FAST_LOOKAHEAD_DEPTH = 1#3
 FAST_MAX_ROUNDS = 5
 FAST_STRIP_STRATEGIES = 2
-MAX_TRAPEZOID_BEAM = 120
+MAX_TRAPEZOID_BEAM = 60 #120
 TRAPEZOID_PAIR_STYLE = "parallelogram_first"
+
+EXACT_GRID_STEPS = (1.0, 0.5, 0.25, 0.2, 0.1)
+EXACT_GRID_MAX_BOARD_CELLS = 400
+EXACT_GRID_MAX_TOTAL_PIECE_CELLS = 220
+EXACT_GRID_MAX_PIECES = 18
+EXACT_GRID_TOL = 1e-6
 
 def freeze_strategy(strategy):
     if strategy is None:
@@ -35,6 +46,51 @@ def freeze_strategy(strategy):
 
 def freeze_bounds(poly):
     return tuple(round(v, 6) for v in poly.bounds)
+
+ACTIVE_PLACEMENT_OBSERVER = None
+
+
+def set_placement_observer(observer):
+    global ACTIVE_PLACEMENT_OBSERVER
+    ACTIVE_PLACEMENT_OBSERVER = observer
+
+
+def notify_placement_observer(placed_parts, placed_part=None):
+    observer = ACTIVE_PLACEMENT_OBSERVER
+    if not callable(observer):
+        return
+    try:
+        observer(list(placed_parts), placed_part)
+    except Exception as exc:
+        print(f"Placement observer failed: {exc}")
+
+
+def log_placed_part(placed_part):
+    print(
+        f"Placed part {placed_part['id']} "
+        f"(shape={placed_part['shape']}) "
+        f"at x={placed_part['x']}, y={placed_part['y']}, angle={placed_part['angle']}"
+    )
+
+
+def commit_placed_part(target_list, placed_part, announce=True):
+    target_list.append(placed_part)
+    if announce:
+        log_placed_part(placed_part)
+    notify_placement_observer(target_list, placed_part)
+    return placed_part
+
+
+def notify_layout_extension(previous_layout, current_layout, announce=False):
+    if current_layout is None:
+        return None
+    temp_layout = list(previous_layout)
+    for placed_part in current_layout[len(previous_layout):]:
+        temp_layout.append(placed_part)
+        if announce:
+            log_placed_part(placed_part)
+        notify_placement_observer(temp_layout, placed_part)
+    return current_layout
 
 # -----------------------------
 # Load JSON
@@ -48,6 +104,122 @@ def load_json(json_path):
 # Geometry conversion
 # -----------------------------
 
+
+
+def _vertex_xy(vertex):
+    return float(vertex.get("x", 0.0)), float(vertex.get("y", 0.0))
+
+
+def _contour_points(contour):
+    points = contour.get("points") or []
+    xy = []
+    for pt in points:
+        if isinstance(pt, dict) and "x" in pt and "y" in pt:
+            xy.append(_vertex_xy(pt))
+    return xy
+
+
+def _is_circle_contour(contour):
+    points = contour.get("points") or []
+    return len(points) == 1 and float(points[0].get("radius", 0) or 0) > 0
+
+
+def contour_to_polygon(contour, samples=72):
+    """
+    Convert one SIOP_CONTOUR into a polygon.
+    Supports standard closed contours and one-point circle contours.
+    Arc segments are left for a later step; current step keeps the straight-point chain.
+    """
+    points = contour.get("points") or []
+    if not points:
+        return None
+
+    if _is_circle_contour(contour):
+        center = points[0]
+        r = float(center.get("radius", 0) or 0)
+        cx, cy = _vertex_xy(center)
+        angle = np.linspace(0, 2 * np.pi, samples, endpoint=False)
+        return ShapelyPolygon([(cx + r * np.cos(a), cy + r * np.sin(a)) for a in angle])
+
+    xy = _contour_points(contour)
+    if len(xy) < 3:
+        return None
+
+    ring = list(xy)
+    if contour.get("bclose", False) and ring[0] != ring[-1]:
+        ring.append(ring[0])
+
+    if len(ring) < 4:
+        return None
+
+    poly = ShapelyPolygon(ring)
+    if not poly.is_valid:
+        poly = poly.buffer(0)
+    return None if poly.is_empty else poly
+
+
+def contours_to_polygon(contours):
+    """
+    Convert SIOP_PART.contours or SIOP_PLATE.contours into one polygon.
+    First contour is the outer contour; the rest are inner contours / holes.
+    """
+    if not isinstance(contours, list) or not contours:
+        return None
+
+    outer_poly = contour_to_polygon(contours[0])
+    if outer_poly is None:
+        return None
+
+    holes = []
+    for contour in contours[1:]:
+        hole_poly = contour_to_polygon(contour)
+        if hole_poly is None:
+            continue
+        holes.append(list(hole_poly.exterior.coords))
+
+    if not holes:
+        return outer_poly
+
+    poly = ShapelyPolygon(list(outer_poly.exterior.coords), holes=holes)
+    if not poly.is_valid:
+        poly = poly.buffer(0)
+    return outer_poly if poly.is_empty else poly
+
+
+def plate_to_polygon(plate):
+    return contours_to_polygon((plate or {}).get("contours") or [])
+
+
+def build_result_json(placed_parts, plate_id="1", quantity=1):
+    """
+    Foundation for the documented result types:
+    SIOP_PARTINSERT -> SIOP_RESULT_PLATE -> SIOP_RESULTS
+    """
+    result_parts = []
+    for p in placed_parts:
+        result_parts.append({
+            "id": str(p.get("base_id", p.get("id", ""))),
+            "mirrored": False,
+            "angle": math.radians(float(p.get("angle", 0.0))),
+            "move": {
+                "x": float(p.get("x", 0.0)),
+                "y": float(p.get("y", 0.0)),
+                "radius": 0.0,
+                "angle1": 0.0,
+                "angle2": 0.0,
+            },
+            "arc_strikes": [],
+        })
+
+    return {
+        "plates": [
+            {
+                "id": str(plate_id),
+                "parts": result_parts,
+                "quantity": int(quantity),
+            }
+        ]
+    }
 
 
 def _find_numeric_value_case_insensitive(obj, target_keys):
@@ -134,10 +306,18 @@ def extract_plate_size(data):
 
         if isinstance(space, list):
             for item in space:
+                plate_poly = plate_to_polygon(item) if isinstance(item, dict) else None
+                if plate_poly is not None:
+                    minx, miny, maxx, maxy = plate_poly.bounds
+                    return float(maxx - minx), float(maxy - miny)
                 width, height = _contour_bounds_size(item)
                 if width is not None and height is not None:
                     return float(width), float(height)
         else:
+            plate_poly = plate_to_polygon(space) if isinstance(space, dict) else None
+            if plate_poly is not None:
+                minx, miny, maxx, maxy = plate_poly.bounds
+                return float(maxx - minx), float(maxy - miny)
             width, height = _contour_bounds_size(space)
             if width is not None and height is not None:
                 return float(width), float(height)
@@ -145,16 +325,11 @@ def extract_plate_size(data):
     return None, None
 
 def part_to_polygon(part):
-    pts = part["contours"][0]["points"]
-
-    # Circle stored as one point with radius
-    if len(pts) == 1 and pts[0].get("radius", 0) > 0:
-        angle = np.linspace(0, 2 * np.pi, 60)
-        r = pts[0]["radius"]
-        cx, cy = pts[0]["x"], pts[0]["y"]
-        return ShapelyPolygon([(cx + r * np.cos(a), cy + r * np.sin(a)) for a in angle])
-
-    return ShapelyPolygon([(p["x"], p["y"]) for p in pts])
+    contours = (part or {}).get("contours") or []
+    poly = contours_to_polygon(contours)
+    if poly is None:
+        raise ValueError(f"Part {part.get('id', '?')} has no valid contours")
+    return poly
 
 
 def poly_size(poly):
@@ -568,11 +743,16 @@ def place_group_items_greedily(group, placed_parts, plate_poly, strategy=None):
     - remaining rectangles
     - other polygons
     Order inside the group is still largest area first.
+
+    Important behavior:
+    once one copy of the current family fails on this plate,
+    stop trying the rest of that family on this plate and move on.
     """
     strategy = strategy or {}
     angle_order = strategy.get("fill_angle_order", [0, 90])
 
     items = sorted(group["items"], key=lambda p: (-p["area"], p["priority"]))
+    family_base_id = group.get("base_id") or (items[0].get("base_id") if items else None)
 
     for item in items:
         cand = None
@@ -611,14 +791,10 @@ def place_group_items_greedily(group, placed_parts, plate_poly, strategy=None):
             cand = place_item_generic(item, placed_parts, plate_poly)
 
         if cand is not None:
-            placed_parts.append(cand)
-            print(
-                f"Placed part {cand['id']} "
-                f"(shape={cand['shape']}) "
-                f"at x={cand['x']}, y={cand['y']}, angle={cand['angle']}"
-            )
+            commit_placed_part(placed_parts, cand)
         else:
-            print(f"Could not place part {item['id']}, not enough space")
+            log_family_stop_on_plate(family_base_id or item.get("base_id", item["id"]), item["id"])
+            break
 
     return placed_parts
 
@@ -1116,6 +1292,14 @@ def place_item_top_left(item, placed_parts, plate_poly, preferred_angles=None):
 
 def get_part_key(p):
     return p.get("base_id", p.get("id", "unknown"))
+
+
+def log_family_stop_on_plate(base_id, item_id=None, reason="not enough space"):
+    shown = item_id if item_id is not None else base_id
+    print(
+        f"Could not place part {shown}, {reason}. "
+        f"Skipping remaining copies of family {base_id} on this plate and trying other parts."
+    )
 
 def group_placed_parts_by_base(placed_parts):
     groups = {}
@@ -1627,8 +1811,11 @@ def place_circles_best_pattern(parts, plate_poly, placed_parts, circle_count):
         if best_count >= circle_count:
             break
 
+    temp_layout = list(placed_parts)
     for p in best_layout[len(placed_parts):]:
-        print(f"Placed part {p['id']} (shape=circle) at x={p['x']}, y={p['y']}, angle=0")
+        log_placed_part(p)
+        temp_layout.append(p)
+        notify_placement_observer(temp_layout, p)
 
     return best_layout, best_count
 
@@ -1874,6 +2061,7 @@ def place_identical_trapezoids_global(items, placed_parts, plate_poly, beam_widt
                     best_used_width = alt_used_width
 
         if best_layout is not None:
+            notify_layout_extension(list(placed_parts), best_layout)
             return best_layout
 
     # --------------------------------------------------
@@ -1974,7 +2162,7 @@ def place_identical_trapezoids_global(items, placed_parts, plate_poly, beam_widt
         for item in items:
             cand = place_item_bottom_left(item, out, plate_poly)
             if cand is not None:
-                out.append(cand)
+                commit_placed_part(out, cand)
         return out
 
     cfg, sol = best_solution
@@ -1983,7 +2171,7 @@ def place_identical_trapezoids_global(items, placed_parts, plate_poly, beam_widt
     for item, (k, x_rel) in zip(items, sol["placements"]):
         x_abs = minx + x_rel
         candidate = translate(cfg[k]["poly"], xoff=x_abs, yoff=cfg[k]["y"])
-        out.append(make_placed_part(item, candidate, x_abs, cfg[k]["y"], cfg[k]["angle"]))
+        commit_placed_part(out, make_placed_part(item, candidate, x_abs, cfg[k]["y"], cfg[k]["angle"]))
 
     return out
 
@@ -2006,18 +2194,26 @@ def place_trapezoids_min_total_space(items, placed_parts, plate_poly, later_item
     if pair_items:
         same_base = len({p["base_id"] for p in pair_items}) == 1
         if same_base and len(pair_items) > 2:
+            previous_out = list(out)
             out = place_identical_trapezoids_global(
                 pair_items,
                 out,
                 plate_poly,
                 beam_width=MAX_TRAPEZOID_BEAM,
             )
+            notify_layout_extension(previous_out, out)
             current_traps = [p for p in out if p["shape"] == "trapezoid"]
             pair_items = []
 
+    blocked_pair_base_ids = set()
+
     # leftover pair items
     for i, item in enumerate(pair_items):
-        remaining_items = pair_items[i + 1:] + single_items + list(later_items)
+        base_id = item.get("base_id", item["id"])
+        if base_id in blocked_pair_base_ids:
+            continue
+
+        remaining_items = [p for p in pair_items[i + 1:] if p.get("base_id", p["id"]) not in blocked_pair_base_ids] + single_items + list(later_items)
 
         cand = place_item_min_trapezoid_waste(
             item=item,
@@ -2038,23 +2234,35 @@ def place_trapezoids_min_total_space(items, placed_parts, plate_poly, later_item
             )
 
         if cand is not None:
-            out.append(cand)
+            commit_placed_part(out, cand)
             current_traps.append(cand)
+        else:
+            blocked_pair_base_ids.add(base_id)
+            log_family_stop_on_plate(base_id, item["id"])
 
     # many identical singles
     if single_items:
         same_base = len({p["base_id"] for p in single_items}) == 1
         if same_base and len(single_items) >= 6:
-            return place_identical_trapezoids_global(
+            previous_out = list(out)
+            out = place_identical_trapezoids_global(
                 single_items,
                 out,
                 plate_poly,
                 beam_width=MAX_TRAPEZOID_BEAM,
             )
+            notify_layout_extension(previous_out, out)
+            return out
+
+    blocked_single_base_ids = set()
 
     # leftover single trapezoids
     for i, item in enumerate(single_items):
-        remaining_items = single_items[i + 1:] + list(later_items)
+        base_id = item.get("base_id", item["id"])
+        if base_id in blocked_single_base_ids:
+            continue
+
+        remaining_items = [p for p in single_items[i + 1:] if p.get("base_id", p["id"]) not in blocked_single_base_ids] + list(later_items)
 
         cand = place_item_min_trapezoid_waste(
             item=item,
@@ -2075,8 +2283,11 @@ def place_trapezoids_min_total_space(items, placed_parts, plate_poly, later_item
             )
 
         if cand is not None:
-            out.append(cand)
+            commit_placed_part(out, cand)
             current_traps.append(cand)
+        else:
+            blocked_single_base_ids.add(base_id)
+            log_family_stop_on_plate(base_id, item["id"])
 
     return out
 
@@ -2334,13 +2545,13 @@ def _place_mixed_template_attempt(parts, parts_list, plate_poly, variant="A"):
                 )
 
             if cand is not None:
-                placed_parts.append(cand)
+                commit_placed_part(placed_parts, cand)
 
     def place_fillers():
         for item in fillers:
             cand = place_item_generic(item, placed_parts, plate_poly)
             if cand is not None:
-                placed_parts.append(cand)
+                commit_placed_part(placed_parts, cand)
 
     if variant == "A":
         place_shelf(top_shelf)
@@ -2710,13 +2921,8 @@ def fill_box_greedily(remaining_items, placed_parts, region_box, strategy=None, 
                 angle_order=angle_order,
             )
             if cand is not None:
-                placed_parts.append(cand)
+                commit_placed_part(placed_parts, cand)
                 progress = True
-                print(
-                    f"Placed part {cand['id']} "
-                    f"(shape={cand['shape']}) "
-                    f"at x={cand['x']}, y={cand['y']}, angle={cand['angle']}"
-                )
             else:
                 new_items.append(item)
 
@@ -2729,6 +2935,10 @@ def fill_box_greedily(remaining_items, placed_parts, region_box, strategy=None, 
 def place_anchor_band(anchor_choice, remaining_items, placed_parts, region_box):
     """
     Place the chosen anchor group bottom-up inside the current region.
+
+    Important rule for the current plate:
+    once one copy of this base_id stops fitting, stop this family immediately,
+    keep the leftover copies for later plates, and move on to the next family.
     """
     group = anchor_choice["group"]
     variant = anchor_choice["variant"]
@@ -2743,26 +2953,26 @@ def place_anchor_band(anchor_choice, remaining_items, placed_parts, region_box):
 
     y_cursor = rminy
     placed_count = 0
+    family_stopped = False
 
     for item in band_items[:repeat_count]:
         poly = translate(variant["poly"], xoff=rminx, yoff=y_cursor)
 
         if not valid_candidate(poly, placed_parts, band_box):
-            continue
+            log_family_stop_on_plate(base_id, item["id"])
+            family_stopped = True
+            break
 
-        placed_parts.append(make_placed_part(item, poly, rminx, y_cursor, variant["angle"]))
-
-        print(
-            f"Placed part {item['id']} "
-            f"(shape={item['shape']}) "
-            f"at x={rminx}, y={y_cursor}, angle={variant['angle']}"
+        commit_placed_part(
+            placed_parts,
+            make_placed_part(item, poly, rminx, y_cursor, variant["angle"]),
         )
 
         y_cursor += variant["h"]
         placed_count += 1
 
     remaining_items = remove_first_n_by_base(remaining_items, base_id, placed_count)
-    return placed_parts, remaining_items, band_box, y_cursor, placed_count
+    return placed_parts, remaining_items, band_box, y_cursor, placed_count, family_stopped, base_id
 
 def place_non_circles_height_width_strategy(parts_list, plate_poly, strategy=None):
     """
@@ -2772,6 +2982,7 @@ def place_non_circles_height_width_strategy(parts_list, plate_poly, strategy=Non
 
     remaining_non_circles = [p for p in parts_list if p["shape"] != "circle"]
     placed_parts = []
+    blocked_base_ids = set()
 
     minx, miny, maxx, maxy = plate_poly.bounds
     x_cursor = minx
@@ -2784,6 +2995,7 @@ def place_non_circles_height_width_strategy(parts_list, plate_poly, strategy=Non
             break
 
         current_groups, _ = build_non_circle_groups(remaining_non_circles)
+        current_groups = [g for g in current_groups if g["base_id"] not in blocked_base_ids]
         if not current_groups:
             break
 
@@ -2800,19 +3012,32 @@ def place_non_circles_height_width_strategy(parts_list, plate_poly, strategy=Non
 
         band_width = anchor_choice["variant"]["w"]
         if x_cursor + band_width > maxx + 1e-6:
-            break
+            blocked_base_ids.add(anchor_choice["group"]["base_id"])
+            continue
 
         region_box = box(x_cursor, miny, maxx, maxy)
 
-        placed_parts, remaining_non_circles, band_box, used_top_y, placed_count = place_anchor_band(
+        (
+            placed_parts,
+            remaining_non_circles,
+            band_box,
+            used_top_y,
+            placed_count,
+            family_stopped,
+            stopped_base_id,
+        ) = place_anchor_band(
             anchor_choice=anchor_choice,
             remaining_items=remaining_non_circles,
             placed_parts=placed_parts,
             region_box=region_box,
         )
 
+        if family_stopped:
+            blocked_base_ids.add(stopped_base_id)
+
         if placed_count == 0:
-            break
+            blocked_base_ids.add(anchor_choice["group"]["base_id"])
+            continue
 
         # fill leftover top box above the anchor band
         bminx, bminy, bmaxx, bmaxy = band_box.bounds
@@ -3097,6 +3322,7 @@ def place_rectangles_longest_width_first(rect_group_list, placed_parts, plate_po
     for group in rect_group_list:
         preferred_angles = [group["angle"], 0, 90]
         group_items = list(group["items"])
+        base_id = group.get("base_id") or (group_items[0].get("base_id") if group_items else None)
 
         for idx, item in enumerate(group_items):
             remaining_items = group_items[idx + 1:]
@@ -3129,23 +3355,24 @@ def place_rectangles_longest_width_first(rect_group_list, placed_parts, plate_po
                 )
 
             if candidate is not None:
-                placed_parts.append(candidate)
-                print(
-                    f"Placed part {candidate['id']} "
-                    f"(shape={candidate['shape']}) "
-                    f"at x={candidate['x']}, y={candidate['y']}, angle={candidate['angle']}"
-                )
+                commit_placed_part(placed_parts, candidate)
             else:
-                print(f"Could not place rectangle part {item['id']}, not enough space")
+                log_family_stop_on_plate(base_id or item.get("base_id", item["id"]), item["id"])
+                break
 
     return placed_parts
 
 
 def place_other_polygons_after_trapezoids(other_items, placed_parts, plate_poly, strategy=None):
     strategy = strategy or {}
+    blocked_base_ids = set()
 
     for idx, item in enumerate(other_items):
-        remaining_items = other_items[idx + 1:]
+        base_id = item.get("base_id", item["id"])
+        if base_id in blocked_base_ids:
+            continue
+
+        remaining_items = [p for p in other_items[idx + 1:] if p.get("base_id", p["id"]) not in blocked_base_ids]
         preferred_angles = strategy.get("other_angles", [0, 90])
         mode = "top_left" if item["shape"] == "rectangle" else "bottom_left"
 
@@ -3164,14 +3391,10 @@ def place_other_polygons_after_trapezoids(other_items, placed_parts, plate_poly,
             candidate = place_item_generic(item, placed_parts, plate_poly)
 
         if candidate is not None:
-            placed_parts.append(candidate)
-            print(
-                f"Placed part {candidate['id']} "
-                f"(shape={candidate['shape']}) "
-                f"at x={candidate['x']}, y={candidate['y']}, angle={candidate['angle']}"
-            )
+            commit_placed_part(placed_parts, candidate)
         else:
-            print(f"Could not place part {item['id']}, not enough space")
+            blocked_base_ids.add(base_id)
+            log_family_stop_on_plate(base_id, item["id"])
 
     return placed_parts
 
@@ -3252,7 +3475,7 @@ def place_parts_trapezoid_strip_from_parts_list(parts, parts_list, plate_poly):
     for item in others:
         candidate = place_item_generic(item, placed_parts, plate_poly)
         if candidate:
-            placed_parts.append(candidate)
+            commit_placed_part(placed_parts, candidate)
 
     # LAST: circles
     if circles:
@@ -3461,40 +3684,433 @@ def place_parts_with_existing(parts, plate_poly, strategy=None, _cache=None):
 
     return layout
 
+
+
+# -----------------------------
+# Exact small-instance solver (discrete grid model)
+# -----------------------------
+@dataclass(frozen=True)
+class ExactGridOrientation:
+    angle: int
+    cells: tuple
+    width: int
+    height: int
+    poly: object
+
+
+@dataclass(frozen=True)
+class ExactGridPieceType:
+    name: str
+    base_id: str
+    shape: str
+    count: int
+    orientations: tuple
+
+
+class ExactGridNestingFailed(Exception):
+    pass
+
+
+def _grid_round(value, step):
+    return round(value / step) * step
+
+
+def _is_multiple_of_step(value, step, tol=EXACT_GRID_TOL):
+    return abs(value - _grid_round(value, step)) <= tol
+
+
+def _poly_aligned_to_step(poly, step, tol=EXACT_GRID_TOL):
+    if poly is None or poly.is_empty:
+        return False
+    for x, y in list(poly.exterior.coords):
+        if not _is_multiple_of_step(x, step, tol) or not _is_multiple_of_step(y, step, tol):
+            return False
+    for ring in poly.interiors:
+        for x, y in list(ring.coords):
+            if not _is_multiple_of_step(x, step, tol) or not _is_multiple_of_step(y, step, tol):
+                return False
+    return True
+
+
+def _axis_aligned_rectangle(poly, tol=EXACT_GRID_TOL):
+    if poly is None or poly.is_empty:
+        return False
+    minx, miny, maxx, maxy = poly.bounds
+    rect = box(minx, miny, maxx, maxy)
+    return rect.symmetric_difference(poly).area <= tol
+
+
+def _cell_box(ix, iy, step):
+    x0 = ix * step
+    y0 = iy * step
+    return box(x0, y0, x0 + step, y0 + step)
+
+
+def _polygon_to_exact_cells(poly, step, tol=EXACT_GRID_TOL):
+    if poly is None or poly.is_empty:
+        return None
+
+    minx, miny, maxx, maxy = poly.bounds
+    if not (_is_multiple_of_step(minx, step, tol) and _is_multiple_of_step(miny, step, tol) and
+            _is_multiple_of_step(maxx, step, tol) and _is_multiple_of_step(maxy, step, tol)):
+        return None
+
+    ix0 = int(round(minx / step))
+    iy0 = int(round(miny / step))
+    ix1 = int(round(maxx / step))
+    iy1 = int(round(maxy / step))
+
+    cells = []
+    cell_polys = []
+    for ix in range(ix0, ix1):
+        for iy in range(iy0, iy1):
+            sq = _cell_box(ix, iy, step)
+            if poly.covers(sq):
+                cells.append((ix - ix0, iy - iy0))
+                cell_polys.append(sq)
+
+    if not cells:
+        return None
+
+    union = unary_union(cell_polys).buffer(0)
+    if union.is_empty:
+        return None
+
+    if union.symmetric_difference(translate(poly, xoff=-minx, yoff=-miny)).area > tol:
+        return None
+
+    return tuple(sorted(cells))
+
+
+def _candidate_exact_steps(parts, plate_poly):
+    if plate_poly is None or plate_poly.is_empty or not _axis_aligned_rectangle(plate_poly):
+        return []
+
+    candidates = []
+    for step in EXACT_GRID_STEPS:
+        minx, miny, maxx, maxy = plate_poly.bounds
+        width = maxx - minx
+        height = maxy - miny
+        if not (_is_multiple_of_step(minx, step) and _is_multiple_of_step(miny, step) and
+                _is_multiple_of_step(width, step) and _is_multiple_of_step(height, step)):
+            continue
+        ok = True
+        for part in parts:
+            poly = part_to_polygon(part)
+            if not _poly_aligned_to_step(poly, step):
+                ok = False
+                break
+        if ok:
+            board_cells = int(round(width / step)) * int(round(height / step))
+            if board_cells <= EXACT_GRID_MAX_BOARD_CELLS:
+                candidates.append(step)
+    return candidates
+
+
+def _build_exact_piece_types(parts, step):
+    piece_types = []
+    total_piece_cells = 0
+    total_piece_count = 0
+
+    for part in parts:
+        base_id = str(part.get('id', '?'))
+        qty = int(part.get('quantity', 1) or 1)
+        poly = normalize_poly(part_to_polygon(part))
+        shape = detect_shape_type(part, poly)
+
+        orientations = []
+        seen = set()
+        for angle in (0, 90, 180, 270):
+            rotated = rotate(poly, angle, origin=tuple(poly.centroid.coords[0]), use_radians=False)
+            rotated = normalize_poly(rotated.buffer(0))
+            cells = _polygon_to_exact_cells(rotated, step)
+            if not cells or cells in seen:
+                continue
+            seen.add(cells)
+            width = max(x for x, _ in cells) + 1
+            height = max(y for _, y in cells) + 1
+            orientations.append(ExactGridOrientation(angle=angle, cells=cells, width=width, height=height, poly=rotated))
+
+        if not orientations:
+            raise ExactGridNestingFailed(f'Part {base_id} is not representable exactly on the discrete grid for step={step}.')
+
+        cell_area = len(orientations[0].cells)
+        total_piece_cells += cell_area * qty
+        total_piece_count += qty
+
+        piece_types.append(
+            ExactGridPieceType(
+                name=base_id,
+                base_id=base_id,
+                shape=shape,
+                count=qty,
+                orientations=tuple(orientations),
+            )
+        )
+
+    if total_piece_cells > EXACT_GRID_MAX_TOTAL_PIECE_CELLS:
+        raise ExactGridNestingFailed(
+            f'Exact discrete search skipped because total piece cells={total_piece_cells} exceeds limit {EXACT_GRID_MAX_TOTAL_PIECE_CELLS}.'
+        )
+
+    if total_piece_count > EXACT_GRID_MAX_PIECES:
+        raise ExactGridNestingFailed(
+            f'Exact discrete search skipped because piece count={total_piece_count} exceeds limit {EXACT_GRID_MAX_PIECES}.'
+        )
+
+    return piece_types, total_piece_cells, total_piece_count
+
+
+def _bit_xy(board_w, x, y):
+    return 1 << (y * board_w + x)
+
+
+def _first_empty_cell(board_w, board_h, occupied):
+    total = board_w * board_h
+    for idx in range(total):
+        if ((occupied >> idx) & 1) == 0:
+            return idx % board_w, idx // board_w
+    return None
+
+
+def _remaining_piece_areas(piece_types, counts):
+    vals = []
+    for i, c in enumerate(counts):
+        if c <= 0:
+            continue
+        area = len(piece_types[i].orientations[0].cells)
+        vals.extend([area] * c)
+    return vals
+
+
+def _region_prune(board_w, board_h, occupied, piece_types, counts):
+    remaining = _remaining_piece_areas(piece_types, counts)
+    if not remaining:
+        return False
+
+    min_area = min(remaining)
+    possible_sums = {0}
+    for a in remaining:
+        possible_sums |= {s + a for s in list(possible_sums)}
+
+    visited = set()
+    for y in range(board_h):
+        for x in range(board_w):
+            idx = y * board_w + x
+            if ((occupied >> idx) & 1) != 0 or idx in visited:
+                continue
+
+            q = deque([(x, y)])
+            visited.add(idx)
+            region_size = 0
+
+            while q:
+                cx, cy = q.popleft()
+                region_size += 1
+                for nx, ny in ((cx + 1, cy), (cx - 1, cy), (cx, cy + 1), (cx, cy - 1)):
+                    if 0 <= nx < board_w and 0 <= ny < board_h:
+                        nidx = ny * board_w + nx
+                        if ((occupied >> nidx) & 1) == 0 and nidx not in visited:
+                            visited.add(nidx)
+                            q.append((nx, ny))
+
+            if region_size < min_area:
+                return True
+            if region_size not in possible_sums:
+                return True
+
+    return False
+
+
+def _anchored_candidates(board_w, board_h, occupied, piece_type, remaining_count, fx, fy):
+    if remaining_count <= 0:
+        return []
+
+    unique = {}
+    for orient in piece_type.orientations:
+        for anchor_x, anchor_y in orient.cells:
+            ox = fx - anchor_x
+            oy = fy - anchor_y
+            if ox < 0 or oy < 0:
+                continue
+            if ox + orient.width > board_w or oy + orient.height > board_h:
+                continue
+
+            mask = 0
+            valid = True
+            for dx, dy in orient.cells:
+                px = ox + dx
+                py = oy + dy
+                bit = _bit_xy(board_w, px, py)
+                if occupied & bit:
+                    valid = False
+                    break
+                mask |= bit
+
+            if valid and mask not in unique:
+                unique[mask] = (orient, ox, oy)
+
+    return [(mask, orient, ox, oy) for mask, (orient, ox, oy) in unique.items()]
+
+
+def exact_nest_grid_parts(parts, plate_poly, step):
+    piece_types, _, _ = _build_exact_piece_types(parts, step)
+
+    minx, miny, maxx, maxy = plate_poly.bounds
+    board_w = int(round((maxx - minx) / step))
+    board_h = int(round((maxy - miny) / step))
+
+    total_piece_cells = sum(len(pt.orientations[0].cells) * pt.count for pt in piece_types)
+    if total_piece_cells > board_w * board_h:
+        raise ExactGridNestingFailed('Total part area exceeds available plate area on the discrete grid.')
+
+    counts0 = tuple(pt.count for pt in piece_types)
+    fail_cache = set()
+    solution = []
+
+    def search(occupied, counts, placements):
+        if sum(counts) == 0:
+            solution[:] = placements[:]
+            return True
+
+        key = (occupied, counts)
+        if key in fail_cache:
+            return False
+
+        if _region_prune(board_w, board_h, occupied, piece_types, counts):
+            fail_cache.add(key)
+            return False
+
+        first_empty = _first_empty_cell(board_w, board_h, occupied)
+        if first_empty is None:
+            solution[:] = placements[:]
+            return True
+
+        fx, fy = first_empty
+        options = []
+        for i, count in enumerate(counts):
+            if count <= 0:
+                continue
+            cands = _anchored_candidates(board_w, board_h, occupied, piece_types[i], count, fx, fy)
+            if cands:
+                options.append((len(cands), -len(piece_types[i].orientations[0].cells), i, cands))
+
+        if not options:
+            fail_cache.add(key)
+            return False
+
+        options.sort()
+        _, _, piece_idx, candidates = options[0]
+        next_counts = list(counts)
+        next_counts[piece_idx] -= 1
+        next_counts = tuple(next_counts)
+
+        candidates.sort(key=lambda item: -len(item[1].cells))
+
+        for mask, orient, ox, oy in candidates:
+            x = minx + ox * step
+            y = miny + oy * step
+            placed_poly = translate(orient.poly, xoff=x, yoff=y).buffer(0)
+            placements.append({
+                'id': piece_types[piece_idx].base_id,
+                'base_id': piece_types[piece_idx].base_id,
+                'unit_count': 1,
+                'poly': placed_poly,
+                'x': x,
+                'y': y,
+                'angle': orient.angle,
+                'shape': piece_types[piece_idx].shape,
+                'solver': f'exact_grid_{step:g}',
+            })
+            if search(occupied | mask, next_counts, placements):
+                return True
+            placements.pop()
+
+        fail_cache.add(key)
+        return False
+
+    if not search(0, counts0, []):
+        raise ExactGridNestingFailed('No exact discrete arrangement exists for this plate.')
+
+    return list(solution)
+
+
+def try_exact_small_instance(parts, plate_poly):
+    steps = _candidate_exact_steps(parts, plate_poly)
+    last_error = None
+    for step in steps:
+        try:
+            return exact_nest_grid_parts(parts, plate_poly, step), step
+        except ExactGridNestingFailed as exc:
+            last_error = exc
+            continue
+
+    if last_error is not None:
+        raise last_error
+    raise ExactGridNestingFailed('Exact discrete search is unavailable for this geometry (needs a rectangular plate and grid-exact parts).')
+
+
 # -----------------------------
 # Plot arrangement / UI helpers
 # -----------------------------
-def create_layout_figure(placed_parts, plate_poly, title="排样结果"):
+def _shared_edge_segments(placed_parts):
+    segments = []
+    for i, p1 in enumerate(placed_parts):
+        b1 = p1["poly"].boundary
+        for j in range(i + 1, len(placed_parts)):
+            p2 = placed_parts[j]
+            inter = b1.intersection(p2["poly"].boundary)
+            if inter.is_empty:
+                continue
+            geoms = getattr(inter, "geoms", [inter])
+            for g in geoms:
+                if g.geom_type == "LineString" and g.length > 1e-6:
+                    segments.append(g)
+                elif g.geom_type == "MultiLineString":
+                    segments.extend([line for line in g.geoms if line.length > 1e-6])
+    return segments
+
+
+def create_layout_figure(placed_parts, plate_poly, title="排样结果", combine_mode=0, envelope_poly=None, leftover_poly=None):
     fig, ax = plt.subplots(figsize=(8.2, 4.8), dpi=120)
     fig.patch.set_facecolor("#f2f2f2")
-    ax.set_facecolor("white")
+    ax.set_facecolor("black")
     ax.set_aspect("equal")
 
     xs, ys = plate_poly.exterior.xy
-    ax.plot(xs, ys, color="black", linewidth=1.2)
+    ax.plot(xs, ys, color="#ff4dff", linewidth=1.0)
+
+    if leftover_poly is not None and not getattr(leftover_poly, "is_empty", True):
+        geoms = leftover_poly.geoms if isinstance(leftover_poly, MultiPolygon) else [leftover_poly]
+        for g in geoms:
+            xs, ys = g.exterior.xy
+            ax.plot(xs, ys, color="#18b9ff", linewidth=1.0)
+
+    if envelope_poly is not None and not getattr(envelope_poly, "is_empty", True):
+        geoms = envelope_poly.geoms if isinstance(envelope_poly, MultiPolygon) else [envelope_poly]
+        for g in geoms:
+            xs, ys = g.exterior.xy
+            ax.plot(xs, ys, color="#ff4d4d", linewidth=1.1)
 
     for p in placed_parts:
         poly = p["poly"]
         polys = poly.geoms if isinstance(poly, MultiPolygon) else [poly]
-
         for g in polys:
             xs, ys = g.exterior.xy
-            ax.fill(xs, ys, facecolor="#09a51a", edgecolor="black", linewidth=0.6)
-
+            ax.fill(xs, ys, facecolor="#0aa51d", edgecolor="white", linewidth=0.55)
+            for hole in g.interiors:
+                hx, hy = hole.xy
+                ax.plot(hx, hy, color="white", linewidth=0.5)
         for g in p.get("display_polys", []) or []:
             xs, ys = g.exterior.xy
-            ax.plot(xs, ys, color="black", linewidth=0.5)
-
+            ax.plot(xs, ys, color="white", linewidth=0.5)
         c = poly.centroid
-        ax.text(
-            c.x,
-            c.y,
-            str(p["id"]),
-            ha="center",
-            va="center",
-            fontsize=5.5,
-            color="black",
-        )
+        ax.plot(c.x, c.y, marker=".", markersize=2.0)
+
+    if int(combine_mode or 0) == 1:
+        for seg in _shared_edge_segments(placed_parts):
+            xs, ys = seg.xy
+            ax.plot(xs, ys, color="yellow", linewidth=0.85)
 
     minx, miny, maxx, maxy = plate_poly.bounds
     pad_x = max((maxx - minx) * 0.04, 1.0)
@@ -3505,7 +4121,7 @@ def create_layout_figure(placed_parts, plate_poly, title="排样结果"):
     ax.set_yticks([])
     for spine in ax.spines.values():
         spine.set_visible(False)
-    ax.set_title(title, fontsize=10, loc="left", pad=8)
+    ax.set_title(title, fontsize=10, loc="left", pad=8, color="white")
     fig.tight_layout(pad=0.5)
     return fig, ax
 
@@ -3545,6 +4161,9 @@ def compute_layout_statistics(parts, placed_parts, plate_poly):
     bbox_area = overall_bbox_area(placed_parts)
     fill_ratio = layout_fill_ratio(placed_parts) * 100.0
     waste_area = layout_waste_area(placed_parts)
+    result_plate = {"id": "1", "parts": placed_parts, "quantity": 1}
+    env_poly = get_plate_envelope_polygon(result_plate, min_len=100)
+    left_poly = get_plate_left_polygon(result_plate, plate_poly, min_len=100)
     return {
         "placed": placed,
         "expected": expected,
@@ -3554,8 +4173,136 @@ def compute_layout_statistics(parts, placed_parts, plate_poly):
         "bbox_area": bbox_area,
         "fill_ratio": fill_ratio,
         "waste_area": waste_area,
+        "envelope_area": 0.0 if env_poly is None else float(env_poly.area),
+        "leftover_area": 0.0 if left_poly is None else float(left_poly.area),
     }
 
+
+
+def _filter_short_edges(coords, min_len):
+    if not coords:
+        return coords
+    cleaned = [coords[0]]
+    for pt in coords[1:]:
+        prev = cleaned[-1]
+        if math.hypot(pt[0] - prev[0], pt[1] - prev[1]) >= min_len:
+            cleaned.append(pt)
+    if len(cleaned) >= 3 and math.hypot(cleaned[0][0] - cleaned[-1][0], cleaned[0][1] - cleaned[-1][1]) < min_len:
+        cleaned[-1] = cleaned[0]
+    return cleaned
+
+
+def polygon_to_siop_contour(poly, min_len=100):
+    if poly is None or poly.is_empty:
+        return {"points": [], "bclose": True}
+    if isinstance(poly, MultiPolygon):
+        poly = max(poly.geoms, key=lambda g: g.area)
+    coords = list(poly.exterior.coords)
+    coords = _filter_short_edges(coords, float(min_len))
+    points = [{"x": float(x), "y": float(y), "radius": 0.0, "angle1": 0.0, "angle2": 0.0} for x, y in coords[:-1]]
+    return {"points": points, "bclose": True}
+
+
+def get_plate_envelope_polygon(result_plate, min_len=100):
+    polys = []
+    for item in result_plate.get("parts", []):
+        poly = item.get("poly")
+        if poly is not None and not poly.is_empty:
+            polys.append(poly)
+    if not polys:
+        return None
+    env = unary_union(polys).convex_hull
+    if not env.is_valid:
+        env = env.buffer(0)
+    return env
+
+
+def get_plate_left_polygon(result_plate, plate_poly, min_len=100):
+    env = get_plate_envelope_polygon(result_plate, min_len=min_len)
+    if env is None:
+        return plate_poly
+    left = plate_poly.difference(env)
+    if hasattr(left, "is_empty") and left.is_empty:
+        return None
+    if not left.is_valid:
+        left = left.buffer(0)
+    return left
+
+
+def FOP_GETPLATE_ENVELOP(result_plate, minLen=100):
+    env = get_plate_envelope_polygon(result_plate, min_len=minLen)
+    return polygon_to_siop_contour(env, min_len=minLen)
+
+
+def FOP_GETPLATE_LEFT(result_plate, plate_poly, minLen=100):
+    left = get_plate_left_polygon(result_plate, plate_poly, min_len=minLen)
+    return polygon_to_siop_contour(left, min_len=minLen)
+
+
+def parse_autonest_input(data):
+    if isinstance(data, str):
+        data = json.loads(data)
+    params = data if isinstance(data, dict) else {}
+    return {
+        "LeftDist": float(params.get("LeftDist", 0.0) or 0.0),
+        "RightDist": float(params.get("RightDist", 0.0) or 0.0),
+        "TopDist": float(params.get("TopDist", 0.0) or 0.0),
+        "BottomDist": float(params.get("BottomDist", 0.0) or 0.0),
+        "PartGap": float(params.get("PartGap", 0.0) or 0.0),
+        "Compensation": float(params.get("Compensation", 0.0) or 0.0),
+        "CutNumbers": int(params.get("CutNumbers", 1) or 1),
+        "Nozzels": int(params.get("Nozzels", 1) or 1),
+        "CarryArc": bool(params.get("CarryArc", False)),
+        "CombineMode": int(params.get("CombineMode", 0) or 0),
+    }
+
+
+def apply_plate_margins(plate_poly, params):
+    if plate_poly is None:
+        return None
+    left = float(params.get("LeftDist", 0.0) or 0.0)
+    right = float(params.get("RightDist", 0.0) or 0.0)
+    top = float(params.get("TopDist", 0.0) or 0.0)
+    bottom = float(params.get("BottomDist", 0.0) or 0.0)
+    minx, miny, maxx, maxy = plate_poly.bounds
+    inner = box(minx + left, miny + bottom, maxx - right, maxy - top)
+    clipped = plate_poly.intersection(inner)
+    if clipped.is_empty:
+        return inner
+    return clipped
+
+
+def scale_part_for_compensation(part, compensation):
+    if abs(compensation) < 1e-9:
+        return part
+    scaled = dict(part)
+    new_contours = []
+    for contour in (part.get("contours") or []):
+        new_contour = dict(contour)
+        pts = []
+        for pt in contour.get("points") or []:
+            new_pt = dict(pt)
+            if "x" in new_pt:
+                new_pt["x"] = float(new_pt["x"]) * (1.0 + compensation)
+            if "y" in new_pt:
+                new_pt["y"] = float(new_pt["y"]) * (1.0 + compensation)
+            if "radius" in new_pt and new_pt["radius"]:
+                new_pt["radius"] = float(new_pt["radius"]) * (1.0 + compensation)
+            pts.append(new_pt)
+        new_contour["points"] = pts
+        new_contours.append(new_contour)
+    scaled["contours"] = new_contours
+    return scaled
+
+
+def apply_nesting_options(parts, plate_poly, params):
+    part_gap = float(params.get("PartGap", 0.0) or 0.0)
+    compensation = float(params.get("Compensation", 0.0) or 0.0)
+    adjusted_parts = [scale_part_for_compensation(p, compensation) for p in parts]
+    if part_gap > 1e-9:
+        adjusted_parts = [{**p, "_extra_gap": part_gap} for p in adjusted_parts]
+    adjusted_plate = apply_plate_margins(plate_poly, params)
+    return adjusted_parts, adjusted_plate
 
 def format_plan_name(candidate, index):
     stats = candidate["stats"]
@@ -3565,19 +4312,32 @@ def format_plan_name(candidate, index):
     )
 
 
-def generate_candidate_layouts(parts, plate_poly):
+def generate_candidate_layouts(parts, plate_poly, live_callback=None):
     solve_cache = {}
     candidates = []
     seen = set()
 
     def add_candidate(name, builder):
+        payload = {"name": name, "parts": parts, "plate_poly": plate_poly}
+        previous_observer = ACTIVE_PLACEMENT_OBSERVER
+        if live_callback is not None:
+            live_callback("start", dict(payload))
+            set_placement_observer(lambda placed_parts, placed_part=None: live_callback(
+                "placement",
+                dict(payload, layout=list(placed_parts), placed_part=placed_part),
+            ))
+        layout = []
         try:
             layout = builder()
         except NestingFailed as exc:
             layout = exc.best_layout or []
         except Exception as exc:
             print(f"Candidate '{name}' failed: {exc}")
-            return
+            layout = []
+        finally:
+            set_placement_observer(previous_observer)
+            if live_callback is not None:
+                live_callback("finish", dict(payload, layout=list(layout)))
 
         if not layout:
             return
@@ -3599,6 +4359,7 @@ def generate_candidate_layouts(parts, plate_poly):
         })
 
     strategies = [
+        ("精确离散求解(小规模)", lambda: try_exact_small_instance(parts, plate_poly)[0]),
         ("默认优先级", lambda: place_parts_with_existing(parts, plate_poly, _cache=solve_cache)),
         ("反向顺序", lambda: place_parts_with_existing(parts, plate_poly, strategy={
             "name": "reverse_order",
@@ -3639,6 +4400,300 @@ def generate_candidate_layouts(parts, plate_poly):
     return candidates
 
 
+def get_strategy_builders(parts, plate_poly, solve_cache=None):
+    solve_cache = solve_cache or {}
+    return [
+        ("默认优先级", lambda: place_parts_with_existing(parts, plate_poly, _cache=solve_cache)),
+        ("组内大件优先", lambda: place_parts_with_existing(parts, plate_poly, strategy={
+            "name": "largest_first_inside_groups",
+            "side_bar_order": "largest_first",
+            "trapezoid_order": "largest_first",
+            "filler_order": "largest_first",
+        }, _cache=solve_cache)),
+        ("旋转优先", lambda: place_parts_with_existing(parts, plate_poly, strategy={
+            "name": "rotate_first",
+            "anchor_angle_order": [90, 0],
+            "fill_angle_order": [90, 0],
+            "top_angles": [90, 0],
+            "side_angles": [90, 0],
+            "filler_angles": [90, 0],
+        }, _cache=solve_cache)),
+    # return [
+    #     ("精确离散求解(小规模)", lambda: try_exact_small_instance(parts, plate_poly)[0]),
+    #     ("默认优先级", lambda: place_parts_with_existing(parts, plate_poly, _cache=solve_cache)),
+    #     ("反向顺序", lambda: place_parts_with_existing(parts, plate_poly, strategy={
+    #         "name": "reverse_order",
+    #         "side_bar_order": "reverse",
+    #         "trapezoid_order": "reverse",
+    #         "filler_order": "reverse",
+    #     }, _cache=solve_cache)),
+    #     ("组内大件优先", lambda: place_parts_with_existing(parts, plate_poly, strategy={
+    #         "name": "largest_first_inside_groups",
+    #         "side_bar_order": "largest_first",
+    #         "trapezoid_order": "largest_first",
+    #         "filler_order": "largest_first",
+    #     }, _cache=solve_cache)),
+    #     ("旋转优先", lambda: place_parts_with_existing(parts, plate_poly, strategy={
+    #         "name": "rotate_first",
+    #         "anchor_angle_order": [90, 0],
+    #         "fill_angle_order": [90, 0],
+    #         "top_angles": [90, 0],
+    #         "side_angles": [90, 0],
+    #         "filler_angles": [90, 0],
+    #     }, _cache=solve_cache)),
+    #     ("完整求解", lambda: nest_parts_with_full_fit(parts, plate_poly)),
+    ]
+
+
+def layout_fingerprint(layout):
+    return tuple(sorted(
+        (
+            str(p.get("base_id", p.get("id", ""))),
+            round(float(p.get("x", 0.0)), 4),
+            round(float(p.get("y", 0.0)), 4),
+            int(round(float(p.get("angle", 0.0)))),
+            int(p.get("unit_count", 1)),
+        )
+        for p in (layout or [])
+    ))
+
+
+def expand_plate_slots(plates_json, fallback_plate=None):
+    slots = []
+    if plates_json:
+        counter = 1
+        for plate in plates_json:
+            qty = int((plate or {}).get("quantity", 1) or 1)
+            qty = max(1, qty)
+            for local_index in range(qty):
+                slot = dict(plate or {})
+                slot["_slot_no"] = counter
+                slot["_slot_local_index"] = local_index + 1
+                slots.append(slot)
+                counter += 1
+    elif fallback_plate is not None:
+        slot = dict(fallback_plate)
+        slot.setdefault("id", "1")
+        slot["_slot_no"] = 1
+        slot["_slot_local_index"] = 1
+        slots.append(slot)
+    return slots
+
+
+def build_plan_entries_from_plate_results(plate_results):
+    grouped = {}
+    for plate_result in plate_results:
+        key = (plate_result.get("plate_size_text", "-"), layout_fingerprint(plate_result.get("layout", [])))
+        grouped.setdefault(key, []).append(plate_result)
+
+    plan_entries = []
+    for rows in grouped.values():
+        rep = rows[0]
+        rep_stats = rep["stats"]
+        plan_entries.append({
+            "utilization": float(rep_stats.get("utilization", 0.0)),
+            "placed": int(rep_stats.get("placed", 0)),
+            "count": len(rows),
+            "size": rep.get("plate_size_text", "-"),
+            "layout": rep.get("layout", []),
+            "plate_poly": rep.get("plate_poly"),
+            "plate_id": str(rep.get("plate_id", "1")),
+            "representative_rows": rows,
+        })
+
+    plan_entries.sort(key=lambda e: (e["count"], e["utilization"], e["placed"]), reverse=True)
+    for idx, entry in enumerate(plan_entries, start=1):
+        entry["name"] = f"排版{idx}"
+    return plan_entries
+
+
+def compute_candidate_statistics(parts, plate_results, total_available_plates):
+    expected = expected_part_count(parts)
+    placed = sum(int(r["stats"].get("placed", 0)) for r in plate_results)
+    used_area = sum(sum(p["poly"].area for p in r.get("layout", [])) for r in plate_results)
+    total_plate_area = sum((r.get("plate_poly").area if r.get("plate_poly") is not None else 0.0) for r in plate_results)
+    utilization = (used_area / total_plate_area * 100.0) if total_plate_area > 1e-9 else 0.0
+    used_plate_count = len(plate_results)
+    progress_pct = (used_plate_count / total_available_plates * 100.0) if total_available_plates > 0 else 0.0
+    plan_entries = build_plan_entries_from_plate_results(plate_results)
+    return {
+        "placed": placed,
+        "expected": expected,
+        "utilization": utilization,
+        "part_kinds": len(plan_entries),
+        "layout_count": used_plate_count,
+        "fill_ratio": progress_pct,
+        "used_plate_count": used_plate_count,
+        "total_plate_count": int(total_available_plates),
+        "envelope_area": sum(float(r["stats"].get("envelope_area", 0.0)) for r in plate_results),
+        "leftover_area": sum(float(r["stats"].get("leftover_area", 0.0)) for r in plate_results),
+    }
+
+
+def _run_strategy_builder(builder, strategy_name, adjusted_parts, adjusted_plate, live_callback=None):
+    payload = {"name": strategy_name, "parts": adjusted_parts, "plate_poly": adjusted_plate}
+    previous_observer = ACTIVE_PLACEMENT_OBSERVER
+    if live_callback is not None:
+        live_callback("start", dict(payload))
+        set_placement_observer(lambda placed_parts, placed_part=None: live_callback(
+            "placement",
+            dict(payload, layout=list(placed_parts), placed_part=placed_part),
+        ))
+    layout = []
+    try:
+        layout = builder()
+    except NestingFailed as exc:
+        layout = exc.best_layout or []
+    except Exception as exc:
+        print(f"Overall candidate '{strategy_name}' failed: {exc}")
+        layout = []
+    finally:
+        set_placement_observer(previous_observer)
+        if live_callback is not None:
+            live_callback("finish", dict(payload, layout=list(layout)))
+    return layout
+
+
+def generate_overall_candidates(parts, plate_slots, params, fallback_width=None, fallback_height=None, live_callback_factory=None):
+    candidates = []
+    seen = set()
+    total_available_plates = len(plate_slots)
+    strategy_names = [name for name, _ in get_strategy_builders(parts, box(0, 0, 1, 1), solve_cache={})]
+
+    for strategy_name in strategy_names:
+        remaining_parts = [dict(p) for p in parts]
+        plate_results = []
+        solve_cache = {}
+
+        for slot_index, slot in enumerate(plate_slots, start=1):
+            base_plate_poly = plate_to_polygon(slot) if slot else None
+            if base_plate_poly is None and fallback_width is not None and fallback_height is not None:
+                base_plate_poly = box(0, 0, float(fallback_width), float(fallback_height))
+            if base_plate_poly is None:
+                continue
+
+            adjusted_parts, adjusted_plate = apply_nesting_options(remaining_parts, base_plate_poly, params)
+            if adjusted_plate is None or adjusted_plate.is_empty:
+                continue
+
+            builders = dict(get_strategy_builders(adjusted_parts, adjusted_plate, solve_cache=solve_cache))
+            builder = builders.get(strategy_name)
+            if builder is None:
+                continue
+
+            live_callback = None
+            if callable(live_callback_factory):
+                try:
+                    plate_label = f"板材{slot.get('id', slot.get('_slot_no', slot_index))}"
+                except Exception:
+                    plate_label = f"板材{slot_index}"
+                base_live_callback = live_callback_factory(plate_label)
+
+                def live_callback(event, payload, _base_live_callback=base_live_callback, _plate_label=plate_label,
+                                  _strategy_name=strategy_name, _parts=parts, _plate_results=plate_results,
+                                  _slot=slot, _slot_index=slot_index, _adjusted_parts=adjusted_parts,
+                                  _adjusted_plate=adjusted_plate):
+                    live_layout = list(payload.get("layout") or [])
+                    combined_plate_results = list(_plate_results)
+                    if event in ("placement", "finish") and live_layout:
+                        plate_stats = compute_layout_statistics(_adjusted_parts, live_layout, _adjusted_plate)
+                        minx, miny, maxx, maxy = _adjusted_plate.bounds
+                        combined_plate_results.append({
+                            "plate_id": str(_slot.get("id", _slot.get("_slot_no", _slot_index))),
+                            "slot_no": int(_slot.get("_slot_no", _slot_index)),
+                            "plate_poly": _adjusted_plate,
+                            "layout": live_layout,
+                            "stats": plate_stats,
+                            "plate_size_text": f"{maxx - minx:.2f} * {maxy - miny:.2f}",
+                        })
+                    plan_entries = build_plan_entries_from_plate_results(combined_plate_results)
+                    stats = compute_candidate_statistics(_parts, combined_plate_results, total_available_plates) if combined_plate_results else {
+                        "placed": 0,
+                        "expected": expected_part_count(_parts),
+                        "utilization": 0.0,
+                        "part_kinds": 0,
+                        "layout_count": 0,
+                        "fill_ratio": 0.0,
+                    }
+                    enriched = dict(payload)
+                    enriched["name"] = _strategy_name
+                    enriched["display_name"] = _strategy_name
+                    enriched["status_label"] = f"{_plate_label}-{_strategy_name}"
+                    enriched["plan_entries"] = plan_entries
+                    enriched["stats"] = stats
+                    _base_live_callback(event, enriched)
+
+            layout = _run_strategy_builder(builder, strategy_name, adjusted_parts, adjusted_plate, live_callback=live_callback)
+            if not layout or placed_part_count(layout) <= 0:
+                continue
+
+            plate_stats = compute_layout_statistics(adjusted_parts, layout, adjusted_plate)
+            minx, miny, maxx, maxy = adjusted_plate.bounds
+            plate_results.append({
+                "plate_id": str(slot.get("id", slot.get("_slot_no", slot_index))),
+                "slot_no": int(slot.get("_slot_no", slot_index)),
+                "plate_poly": adjusted_plate,
+                "layout": layout,
+                "stats": plate_stats,
+                "plate_size_text": f"{maxx - minx:.2f} * {maxy - miny:.2f}",
+            })
+
+            remaining_parts = build_remaining_parts_json(remaining_parts, layout)
+            if not remaining_parts:
+                break
+
+        if not plate_results:
+            continue
+
+        overall_fp = tuple((r["plate_size_text"], layout_fingerprint(r.get("layout", []))) for r in plate_results)
+        if overall_fp in seen:
+            continue
+        seen.add(overall_fp)
+
+        candidates.append({
+            "name": strategy_name,
+            "plate_results": plate_results,
+            "plan_entries": build_plan_entries_from_plate_results(plate_results),
+            "stats": compute_candidate_statistics(parts, plate_results, total_available_plates),
+        })
+
+    candidates.sort(key=lambda c: (
+        c["stats"]["placed"],
+        c["stats"]["utilization"],
+        c["stats"]["fill_ratio"],
+        -c["stats"]["part_kinds"],
+    ), reverse=True)
+    return candidates
+
+
+def build_results_json_from_candidate(candidate):
+    if not candidate:
+        return {"plates": []}
+    result_plates = []
+    for entry in candidate.get("plan_entries", []):
+        result_plates.append({
+            "id": str(entry.get("plate_id", "1")),
+            "parts": [
+                {
+                    "id": str(p.get("base_id", p.get("id", ""))),
+                    "mirrored": False,
+                    "angle": math.radians(float(p.get("angle", 0.0))),
+                    "move": {
+                        "x": float(p.get("x", 0.0)),
+                        "y": float(p.get("y", 0.0)),
+                        "radius": 0.0,
+                        "angle1": 0.0,
+                        "angle2": 0.0,
+                    },
+                    "arc_strikes": [],
+                }
+                for p in entry.get("layout", [])
+            ],
+            "quantity": int(entry.get("count", 1)),
+        })
+    return {"plates": result_plates}
+
+
 # -----------------------------
 # GUI
 # -----------------------------
@@ -3651,13 +4706,25 @@ class NestingApp:
 
         self.parts = None
         self.plate_poly = None
+        self.plates_json = []
+        self.plate_json = None
         self.plate_width = None
         self.plate_height = None
         self.candidates = []
         self.selected_candidate = None
+        self.current_candidate_index = None
+        self.current_plan_entry = None
+        self.current_plan_entries = []
+        self.total_available_plates = 0
+        self.confirmed_result_json = None
+        self.autonest_params = parse_autonest_input({})
         self.current_figure = None
         self.current_canvas = None
         self.current_toolbar = None
+        self._worker_thread = None
+        self._worker_queue = queue.Queue()
+        self._current_job_id = 0
+        self._is_running = False
 
         self._configure_style()
         self._build_ui()
@@ -3689,17 +4756,28 @@ class NestingApp:
         top.columnconfigure(0, weight=1)
 
         ctrl = ttk.Frame(top, style="App.TFrame")
-        ctrl.grid(row=0, column=0, sticky="ew", pady=(0, 8))
-        for col in range(12):
+        ctrl.grid(row=0, column=0, sticky="w", pady=(0, 8))
+        for col in range(3):
             ctrl.columnconfigure(col, weight=0)
-        ctrl.columnconfigure(11, weight=1)
 
-        ttk.Label(ctrl, text="Plate Size:", style="Small.TLabel").grid(row=0, column=0, sticky="w")
         self.plate_size_var = tk.StringVar(value="Not loaded")
-        ttk.Label(ctrl, textvariable=self.plate_size_var, style="Blue.TLabel").grid(row=0, column=1, sticky="w", padx=(4, 18))
-        ttk.Button(ctrl, text="Load JSON", command=self.load_json_file).grid(row=0, column=4, padx=4)
-        ttk.Button(ctrl, text="Run Nesting", command=self.run_nesting).grid(row=0, column=5, padx=4)
-        ttk.Button(ctrl, text="Confirm Plan", command=self.confirm_plan).grid(row=0, column=6, padx=4)
+        self.left_dist_var = tk.DoubleVar(value=0.0)
+        self.right_dist_var = tk.DoubleVar(value=0.0)
+        self.top_dist_var = tk.DoubleVar(value=0.0)
+        self.bottom_dist_var = tk.DoubleVar(value=0.0)
+        self.part_gap_var = tk.DoubleVar(value=0.0)
+        self.compensation_var = tk.DoubleVar(value=0.0)
+        self.cut_numbers_var = tk.IntVar(value=1)
+        self.nozzels_var = tk.IntVar(value=1)
+        self.carry_arc_var = tk.BooleanVar(value=False)
+        self.combine_mode_var = tk.IntVar(value=0)
+
+        self.load_button = ttk.Button(ctrl, text="Load JSON", command=self.load_json_file)
+        self.load_button.grid(row=0, column=0, padx=(0, 8))
+        self.run_button = ttk.Button(ctrl, text="Run Nesting", command=self.run_nesting)
+        self.run_button.grid(row=0, column=1, padx=8)
+        self.confirm_button = ttk.Button(ctrl, text="Confirm Plan", command=self.confirm_plan)
+        self.confirm_button.grid(row=0, column=2, padx=(8, 0))
 
         self.header_var = tk.StringVar(value="第0次优化，已排入0个，平均利用率0.00%")
         ttk.Label(top, textvariable=self.header_var, style="Summary.TLabel").grid(row=1, column=0, sticky="w", pady=(0, 6))
@@ -3745,18 +4823,19 @@ class NestingApp:
         self.canvas_host.rowconfigure(0, weight=1)
         self.canvas_host.columnconfigure(0, weight=1)
         self.toolbar_frame = ttk.Frame(preview_panel)
+        self.toolbar_frame.grid(row=1, column=0, sticky="ew")
 
         plan_panel = tk.Frame(main, bg="white", highlightbackground="#c6c6c6", highlightthickness=1)
-        plan_panel.grid(row=0, column=1, sticky="ns")
+        plan_panel.grid(row=0, column=1, sticky="nsew")
         plan_panel.rowconfigure(0, weight=1)
         plan_panel.columnconfigure(0, weight=1)
         self.plan_tree = ttk.Treeview(
             plan_panel,
             columns=("name", "util", "parts", "count", "size"),
             show="headings",
-            height=14,
+            height=8,
         )
-        headings = [("name", "排样名称", 84), ("util", "利用率(%)", 92), ("parts", "零件数", 72), ("count", "排版数", 72), ("size", "板材尺寸", 180)]
+        headings = [("name", "排样名称", 90), ("util", "利用率(%)", 90), ("parts", "零件数", 70), ("count", "排版数", 70), ("size", "板材尺寸", 165)]
         for key, title, width in headings:
             self.plan_tree.heading(key, text=title)
             self.plan_tree.column(key, width=width, anchor="center")
@@ -3767,6 +4846,9 @@ class NestingApp:
         self.plan_tree.configure(yscrollcommand=plan_scroll.set)
         self.plan_tree.bind("<<TreeviewSelect>>", self.on_plan_select)
 
+
+        self.detail_tree = None
+
         bottom = ttk.Frame(self.root, padding=(12, 0, 12, 12), style="App.TFrame")
         bottom.grid(row=2, column=0, sticky="ew")
         bottom.columnconfigure(0, weight=1)
@@ -3776,7 +4858,7 @@ class NestingApp:
             bottom,
             columns=("result", "util", "parts", "kinds", "count"),
             show="headings",
-            height=6,
+            height=5,
         )
         bottom_headings = [("result", "排样结果", 180), ("util", "总利用率(%)", 180), ("parts", "零件总数", 180), ("kinds", "排版种类", 180), ("count", "排版总数", 180)]
         for key, title, width in bottom_headings:
@@ -3784,87 +4866,241 @@ class NestingApp:
             self.result_tree.column(key, width=width, anchor="center")
         self.result_tree.column("result", anchor="w")
         self.result_tree.grid(row=1, column=0, sticky="ew")
+        self.result_tree.bind("<<TreeviewSelect>>", self.on_result_select)
+
+        action_row = ttk.Frame(bottom, style="App.TFrame")
+        action_row.grid(row=2, column=0, sticky="ew", pady=(8, 0))
+        self.auto_select_button = ttk.Button(action_row, text="返回自动选择", command=self.select_best_candidate)
+        self.auto_select_button.pack(side=tk.LEFT)
+        self.bottom_confirm_button = ttk.Button(action_row, text="确认", command=self.confirm_plan)
+        self.bottom_confirm_button.pack(side=tk.RIGHT)
+        self.cancel_button = ttk.Button(action_row, text="取消", command=self.root.quit)
+        self.cancel_button.pack(side=tk.RIGHT, padx=(0, 8))
 
         self.status_var = tk.StringVar(value="Ready")
-        ttk.Label(bottom, textvariable=self.status_var, style="Small.TLabel").grid(row=2, column=0, sticky="w", pady=(8, 0))
+        ttk.Label(bottom, textvariable=self.status_var, style="Small.TLabel").grid(row=3, column=0, sticky="w", pady=(8, 0))
+        self._pump_worker_queue()
 
-    def _plate_size_text(self):
-        if self.plate_poly is None:
-            return "-"
-        minx, miny, maxx, maxy = self.plate_poly.bounds
-        return f"{maxx - minx:.2f} * {maxy - miny:.2f}"
 
-    def load_json_file(self):
-        file_path = filedialog.askopenfilename(filetypes=[("JSON Files", "*.json")])
-        if not file_path:
+    def _collect_params(self):
+        self.autonest_params = {
+            "LeftDist": float(self.left_dist_var.get() or 0.0),
+            "RightDist": float(self.right_dist_var.get() or 0.0),
+            "TopDist": float(self.top_dist_var.get() or 0.0),
+            "BottomDist": float(self.bottom_dist_var.get() or 0.0),
+            "PartGap": float(self.part_gap_var.get() or 0.0),
+            "Compensation": float(self.compensation_var.get() or 0.0),
+            "CutNumbers": int(self.cut_numbers_var.get() or 1),
+            "Nozzels": int(self.nozzels_var.get() or 1),
+            "CarryArc": bool(self.carry_arc_var.get()),
+            "CombineMode": int(self.combine_mode_var.get() or 0),
+        }
+        return self.autonest_params
+
+    def select_best_candidate(self):
+        if not self.candidates or not self.result_tree.get_children():
             return
+        first_id = self.result_tree.get_children()[0]
+        self.result_tree.selection_set(first_id)
+        self.result_tree.focus(first_id)
+        self.show_candidate(0)
 
+    def on_result_select(self, _event=None):
+        selection = self.result_tree.selection()
+        if not selection:
+            return
+        iid = selection[0]
+        if iid == "live_result":
+            return
         try:
-            data = load_json(file_path)
-            self.parts = data["parts"]
-
-            plate_w, plate_h = extract_plate_size(data)
-            self.plate_width = plate_w
-            self.plate_height = plate_h
-            if plate_w is not None and plate_h is not None:
-                self.plate_size_var.set(f"{plate_w:g} x {plate_h:g}")
-            else:
-                self.plate_size_var.set("Not found in JSON")
-
-            total_quantity = sum(int(p.get("quantity", 1)) for p in self.parts)
-            size_text = f" | plate {plate_w:g} x {plate_h:g}" if plate_w is not None and plate_h is not None else " | plate size not found in JSON"
-            self.status_var.set(f"Loaded {len(self.parts)} parts / {total_quantity} items{size_text}")
-            messagebox.showinfo(
-                "Success",
-                f"Loaded {len(self.parts)} part objects ({total_quantity} total items)"
-                + (f"\nDetected plate size: {plate_w:g} x {plate_h:g}" if plate_w is not None and plate_h is not None else "\nPlate size was not found in JSON."),
-            )
-        except Exception as exc:
-            messagebox.showerror("Error", f"Failed to load JSON: {exc}")
-
-    def run_nesting(self):
-        if self.parts is None:
-            messagebox.showerror("Error", "Please load a JSON file first")
+            index = self.result_tree.index(iid)
+        except Exception:
             return
+        self.show_candidate(index)
 
-        if self.plate_width is None or self.plate_height is None:
-            messagebox.showerror("Error", "Plate width and height must come from the JSON file.")
-            return
-
-        self.plate_poly = box(0, 0, float(self.plate_width), float(self.plate_height))
-        self.status_var.set("Calculating candidate nesting plans...")
-        self.root.update_idletasks()
-
-        try:
-            self.candidates = generate_candidate_layouts(self.parts, self.plate_poly)
-        except Exception as exc:
-            messagebox.showerror("Error", f"Nesting failed: {exc}")
-            self.status_var.set("Nesting failed")
-            return
-
+    def _set_plan_entries(self, plan_entries, render_first=False):
         for row in self.plan_tree.get_children():
             self.plan_tree.delete(row)
-        for row in self.result_tree.get_children():
-            self.result_tree.delete(row)
-
-        plate_size_text = self._plate_size_text()
-        for index, candidate in enumerate(self.candidates, start=1):
-            stats = candidate["stats"]
-            plan_name = f"排版{index}"
-            candidate["plan_row_name"] = plan_name
+        self.current_plan_entries = list(plan_entries or [])
+        for index, entry in enumerate(self.current_plan_entries, start=1):
             iid = f"plan_{index}"
             self.plan_tree.insert(
                 "",
                 tk.END,
                 iid=iid,
                 values=(
-                    plan_name,
-                    f"{stats['utilization']:.2f}%",
-                    str(stats["placed"]),
-                    str(stats["layout_count"]),
-                    plate_size_text,
+                    entry.get("name", f"排版{index}"),
+                    f"{float(entry.get('utilization', 0.0)):.2f}%",
+                    str(int(entry.get("placed", 0))),
+                    str(int(entry.get("count", 1))),
+                    entry.get("size", "-"),
                 ),
             )
+        if render_first and self.current_plan_entries:
+            try:
+                first_id = self.plan_tree.get_children()[0]
+                self.plan_tree.selection_set(first_id)
+                self.plan_tree.focus(first_id)
+            except Exception:
+                pass
+            self._show_plan_entry(0)
+
+    def _load_candidate_plan_entries(self, candidate):
+        self._set_plan_entries(candidate.get("plan_entries", []), render_first=False)
+
+    def _populate_detail_tree(self, candidate):
+        if self.detail_tree is None:
+            return
+        for row in self.detail_tree.get_children():
+            self.detail_tree.delete(row)
+        for idx, part in enumerate(candidate["layout"], start=1):
+            self.detail_tree.insert(
+                "",
+                tk.END,
+                iid=f"detail_{idx}",
+                values=(
+                    str(part.get("base_id", part.get("id", ""))),
+                    str(int(part.get("unit_count", 1))),
+                    f"{float(part.get('angle', 0.0)):.1f}",
+                    f"{float(part.get('x', 0.0)):.2f}",
+                    f"{float(part.get('y', 0.0)):.2f}",
+                ),
+            )
+
+    def _plate_size_text(self, plate_poly=None):
+        plate_poly = self.plate_poly if plate_poly is None else plate_poly
+        if plate_poly is None:
+            return "-"
+        minx, miny, maxx, maxy = plate_poly.bounds
+        return f"{maxx - minx:.2f} * {maxy - miny:.2f}"
+
+    def _compute_live_stats(self, payload):
+        stats = dict(payload.get("stats") or {})
+        stats.setdefault("placed", 0)
+        stats.setdefault("expected", expected_part_count(self.parts or []))
+        stats.setdefault("utilization", 0.0)
+        stats.setdefault("part_kinds", len(payload.get("plan_entries") or []))
+        stats.setdefault("layout_count", sum(int(entry.get("count", 1)) for entry in (payload.get("plan_entries") or [])))
+        stats.setdefault("fill_ratio", 0.0)
+        return stats
+
+    def _ensure_live_result_row(self, label):
+        values = (label, f"{self._bar_text(0.0)}  0.00%", "0/0", "0", "0")
+        if "live_result" in self.result_tree.get_children():
+            self.result_tree.item("live_result", values=values)
+        else:
+            self.result_tree.insert("", 0, iid="live_result", values=values)
+
+    def _update_live_result_row(self, label, payload):
+        stats = self._compute_live_stats(payload)
+        util_bar = self._bar_text(stats["utilization"])
+        self._ensure_live_result_row(label)
+        self.result_tree.item(
+            "live_result",
+            values=(
+                label,
+                f"{util_bar}  {stats['utilization']:.2f}%",
+                f"{stats['placed']}/{stats['expected']}",
+                str(stats["part_kinds"]),
+                str(stats["layout_count"]),
+            ),
+        )
+        # Do not update the preview/detail region in real time.
+        # Keep those regions stable until a final candidate is ready.
+        self.header_var.set(f"{label}，已排入{stats['placed']}个，平均利用率{stats['utilization']:.2f}%")
+        self.progress_var.set(stats["fill_ratio"])
+        self.progress_label.configure(text=f"{stats['fill_ratio']:.0f}%")
+        self.result_title_var.set(f"◎ {label}：")
+        self.summary_util_var.set(f"{stats['utilization']:.2f}%")
+        self.summary_parts_var.set(f"{stats['placed']}/{stats['expected']}")
+        self.summary_kinds_var.set(str(stats["part_kinds"]))
+        self.summary_layout_count_var.set(str(stats["layout_count"]))
+        self.status_var.set(f"Running {payload.get('status_label', label)} ...")
+        self.root.update_idletasks()
+
+    def _make_live_callback(self, plate_label, job_id=None):
+        active_job_id = self._current_job_id if job_id is None else job_id
+
+        def callback(event, payload):
+            self._queue_ui_message(active_job_id, "live_event", plate_label, event, dict(payload))
+
+        return callback
+
+    def _set_running_state(self, is_running):
+        self._is_running = bool(is_running)
+        state = "disabled" if self._is_running else "normal"
+        for button in (
+            getattr(self, "load_button", None),
+            getattr(self, "run_button", None),
+            getattr(self, "confirm_button", None),
+            getattr(self, "auto_select_button", None),
+            getattr(self, "bottom_confirm_button", None),
+        ):
+            if button is None:
+                continue
+            try:
+                button.configure(state=state)
+            except Exception:
+                pass
+
+    def _queue_ui_message(self, job_id, kind, *payload):
+        try:
+            self._worker_queue.put((job_id, kind, payload))
+        except Exception:
+            pass
+
+    def _pump_worker_queue(self):
+        try:
+            while True:
+                job_id, kind, payload = self._worker_queue.get_nowait()
+                if job_id != self._current_job_id:
+                    continue
+                if kind == "live_event":
+                    plate_label, event, data = payload
+                    self._handle_live_event(plate_label, event, data)
+                elif kind == "done":
+                    candidates, multi_plate_mode = payload
+                    self._apply_nesting_results(candidates, multi_plate_mode)
+                elif kind == "error":
+                    message_text, detail_text = payload
+                    self._set_running_state(False)
+                    self.status_var.set("Nesting failed")
+                    messagebox.showerror("Error", message_text)
+                    if detail_text:
+                        print(detail_text)
+        except queue.Empty:
+            pass
+        finally:
+            try:
+                self.root.after(40, self._pump_worker_queue)
+            except tk.TclError:
+                pass
+
+    def _handle_live_event(self, plate_label, event, payload):
+        label = payload.get("display_name") or payload.get("name") or "实时结果"
+        if event == "start":
+            self._ensure_live_result_row(label)
+            self.status_var.set(f"Running {payload.get('status_label', label)} ...")
+            # Do not populate the preview/detail region during live progress.
+            self.root.update_idletasks()
+        elif event in ("placement", "finish"):
+            self._update_live_result_row(label, payload)
+
+    def _apply_nesting_results(self, candidates, multi_plate_mode):
+        self._set_running_state(False)
+        self.candidates = list(candidates or [])
+        self.selected_candidate = None
+        self.current_candidate_index = None
+        self.current_plan_entry = None
+        self.current_plan_entries = []
+
+        for row in self.plan_tree.get_children():
+            self.plan_tree.delete(row)
+        for row in self.result_tree.get_children():
+            self.result_tree.delete(row)
+
+        for index, candidate in enumerate(self.candidates, start=1):
+            stats = candidate["stats"]
             util_bar = self._bar_text(stats["utilization"])
             self.result_tree.insert(
                 "",
@@ -3884,11 +5120,115 @@ class NestingApp:
             self.status_var.set("No result")
             return
 
-        first_id = self.plan_tree.get_children()[0]
-        self.plan_tree.selection_set(first_id)
-        self.plan_tree.focus(first_id)
+        first_id = self.result_tree.get_children()[0]
+        self.result_tree.selection_set(first_id)
+        self.result_tree.focus(first_id)
         self.show_candidate(0)
         self.status_var.set(f"Generated {len(self.candidates)} sorted candidate plan(s)")
+
+    def _worker_run_nesting(self, job_id, params, plate_entries, multi_plate_mode):
+        try:
+            fallback_plate = self.plate_json or {"id": "1"}
+            plate_slots = expand_plate_slots(self.plates_json, fallback_plate=fallback_plate)
+            if not plate_slots:
+                plate_slots = expand_plate_slots([], fallback_plate={"id": "1"})
+            self.total_available_plates = len(plate_slots)
+
+            candidates = generate_overall_candidates(
+                self.parts,
+                plate_slots,
+                params,
+                fallback_width=self.plate_width,
+                fallback_height=self.plate_height,
+                live_callback_factory=lambda plate_label: self._make_live_callback(plate_label, job_id),
+            )
+
+            self._queue_ui_message(job_id, "done", candidates, len(plate_slots) > 1)
+        except Exception as exc:
+            self._queue_ui_message(job_id, "error", f"Nesting failed: {exc}", traceback.format_exc())
+
+    def load_json_file(self):
+        file_path = filedialog.askopenfilename(filetypes=[("JSON Files", "*.json")])
+        if not file_path:
+            return
+
+        try:
+            data = load_json(file_path)
+            self.parts = data["parts"]
+            plates = data.get("plates") or []
+            self.plates_json = list(plates)
+            self.plate_json = plates[0] if plates else None
+
+            plate_w, plate_h = extract_plate_size(data)
+            self.plate_width = plate_w
+            self.plate_height = plate_h
+            if plate_w is not None and plate_h is not None:
+                self.plate_size_var.set(f"{plate_w:g} x {plate_h:g}")
+            else:
+                self.plate_size_var.set("Not found in JSON")
+
+            total_quantity = sum(int(p.get("quantity", 1)) for p in self.parts)
+            size_text = f" | plate {plate_w:g} x {plate_h:g}" if plate_w is not None and plate_h is not None else " | plate size not found in JSON"
+            plate_count = len(self.plates_json) if self.plates_json else (1 if self.plate_json else 0)
+            self.status_var.set(f"Loaded {len(self.parts)} parts / {total_quantity} items / {plate_count} plate(s){size_text}")
+            messagebox.showinfo(
+                "Success",
+                f"Loaded {len(self.parts)} part objects ({total_quantity} total items)"
+                + (f"\nDetected plate size: {plate_w:g} x {plate_h:g}" if plate_w is not None and plate_h is not None else "\nPlate size was not found in JSON."),
+            )
+        except Exception as exc:
+            messagebox.showerror("Error", f"Failed to load JSON: {exc}")
+
+    def run_nesting(self):
+        if self.parts is None:
+            messagebox.showerror("Error", "Please load a JSON file first")
+            return
+
+        if self.plate_width is None and not self.plates_json:
+            messagebox.showerror("Error", "Plate width and height must come from the JSON file.")
+            return
+
+        if self._is_running:
+            self.status_var.set("Nesting is already running...")
+            return
+
+        params = self._collect_params()
+        plate_entries = self.plates_json or ([self.plate_json] if self.plate_json else [])
+        if not plate_entries:
+            plate_entries = [{"id": "1"}]
+
+        self.candidates = []
+        self.selected_candidate = None
+        self.current_candidate_index = None
+        self.current_plan_entry = None
+        self.current_plan_entries = []
+        multi_plate_mode = len(plate_entries) > 1
+        self._current_job_id += 1
+        job_id = self._current_job_id
+
+        for row in self.plan_tree.get_children():
+            self.plan_tree.delete(row)
+        for row in self.result_tree.get_children():
+            self.result_tree.delete(row)
+
+        self._set_running_state(True)
+        self.status_var.set("Calculating candidate nesting plans...")
+        self.header_var.set("第0次优化，已排入0个，平均利用率0.00%")
+        self.progress_var.set(0.0)
+        self.progress_label.configure(text="0%")
+        self.result_title_var.set("◎ 排样结果1：")
+        self.summary_util_var.set("0.00%")
+        self.summary_parts_var.set("0/0")
+        self.summary_kinds_var.set("0")
+        self.summary_layout_count_var.set("0")
+        self.root.update_idletasks()
+
+        self._worker_thread = threading.Thread(
+            target=self._worker_run_nesting,
+            args=(job_id, params, plate_entries, multi_plate_mode),
+            daemon=True,
+        )
+        self._worker_thread.start()
 
     def _bar_text(self, value):
         filled = max(0, min(12, int(round(value / 100.0 * 12))))
@@ -3903,7 +5243,7 @@ class NestingApp:
             index = self.plan_tree.index(iid)
         except Exception:
             return
-        self.show_candidate(index)
+        self._show_plan_entry(index)
 
     def show_candidate(self, index):
         if index < 0 or index >= len(self.candidates):
@@ -3911,11 +5251,28 @@ class NestingApp:
 
         candidate = self.candidates[index]
         self.selected_candidate = candidate
-        self._render_candidate(candidate)
+        self.current_candidate_index = index
+        self._load_candidate_plan_entries(candidate)
         self._update_header(candidate, index)
         self._highlight_result_row(index)
 
-    def _render_candidate(self, candidate):
+        if self.current_plan_entries:
+            first_id = self.plan_tree.get_children()[0]
+            self.plan_tree.selection_set(first_id)
+            self.plan_tree.focus(first_id)
+            self._show_plan_entry(0)
+        else:
+            self.current_plan_entry = None
+
+    def _show_plan_entry(self, index):
+        if index < 0 or index >= len(self.current_plan_entries):
+            return
+        entry = self.current_plan_entries[index]
+        self.current_plan_entry = entry
+        self._render_candidate(entry)
+        self._populate_detail_tree(entry)
+
+    def _render_candidate(self, plan_entry):
         if self.current_canvas is not None:
             self.current_canvas.get_tk_widget().destroy()
             self.current_canvas = None
@@ -3926,11 +5283,27 @@ class NestingApp:
             plt.close(self.current_figure)
             self.current_figure = None
 
-        fig, _ = create_layout_figure(candidate["layout"], self.plate_poly, title="")
+        render_plate_poly = plan_entry.get("plate_poly")
+        if render_plate_poly is not None:
+            self.plate_poly = render_plate_poly
+        result_plate = {"id": str(plan_entry.get("plate_id", "1")), "parts": plan_entry.get("layout", []), "quantity": int(plan_entry.get("count", 1))}
+        env_poly = get_plate_envelope_polygon(result_plate, min_len=100)
+        left_poly = get_plate_left_polygon(result_plate, render_plate_poly, min_len=100)
+        fig, _ = create_layout_figure(
+            plan_entry.get("layout", []),
+            render_plate_poly,
+            title="",
+            combine_mode=self.autonest_params.get("CombineMode", 0),
+            envelope_poly=env_poly,
+            leftover_poly=left_poly,
+        )
         self.current_figure = fig
         self.current_canvas = FigureCanvasTkAgg(fig, master=self.canvas_host)
         self.current_canvas.draw()
         self.current_canvas.get_tk_widget().grid(row=0, column=0, sticky="nsew")
+        self.current_toolbar = NavigationToolbar2Tk(self.current_canvas, self.toolbar_frame, pack_toolbar=False)
+        self.current_toolbar.update()
+        self.current_toolbar.pack(side=tk.LEFT)
 
     def _update_header(self, candidate, index):
         stats = candidate["stats"]
@@ -3957,14 +5330,38 @@ class NestingApp:
             return
 
         stats = self.selected_candidate["stats"]
+        self.confirmed_result_json = build_results_json_from_candidate(self.selected_candidate)
         messagebox.showinfo(
             "方案已确认",
-            "已选择当前套料方案。\n\n"
-            f"方案: {self.selected_candidate.get('plan_row_name', self.selected_candidate['name'])}\n"
-            f"排样结果: {stats['placed']}/{stats['expected']}\n"
-            f"利用率: {stats['utilization']:.2f}%"
+            (
+                "已选择当前套料方案。\n\n"
+                f"方案: 排样结果{(self.current_candidate_index or 0) + 1}\n"
+                f"排样结果: {stats['placed']}/{stats['expected']}\n"
+                f"利用率: {stats['utilization']:.2f}%\n"
+                f"排版种类: {stats['part_kinds']}\n"
+                f"排版总数: {stats['layout_count']}\n"
+                f"用板进度: {stats['used_plate_count']}/{stats['total_plate_count']}"
+            )
         )
-        self.status_var.set(f"Confirmed plan: {self.selected_candidate.get('plan_row_name', self.selected_candidate['name'])}")
+        self.status_var.set(f"Confirmed plan: 排样结果{(self.current_candidate_index or 0) + 1}")
+
+
+def FOP_AUTONEST_PARAM(input_json, parent=None):
+    params = parse_autonest_input(input_json)
+    root = tk.Tk() if parent in (None, 0) else tk.Toplevel(parent)
+    app = NestingApp(root)
+    app.left_dist_var.set(params["LeftDist"])
+    app.right_dist_var.set(params["RightDist"])
+    app.top_dist_var.set(params["TopDist"])
+    app.bottom_dist_var.set(params["BottomDist"])
+    app.part_gap_var.set(params["PartGap"])
+    app.compensation_var.set(params["Compensation"])
+    app.cut_numbers_var.set(params["CutNumbers"])
+    app.nozzels_var.set(params["Nozzels"])
+    app.carry_arc_var.set(params["CarryArc"])
+    app.combine_mode_var.set(params["CombineMode"])
+    root.mainloop()
+    return json.dumps(app.confirmed_result_json or {"plates": []}, ensure_ascii=False)
 
 
 if __name__ == "__main__":

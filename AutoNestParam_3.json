@@ -1,0 +1,339 @@
+{
+	"options" : 
+	{
+		"BottomDist" : 5.0,
+		"CarryArc" : false,
+		"ComAngle" : 90.0,
+		"CombinFirst" : true,
+		"CombineMinLength" : 5.0,
+		"CombineMode" : 1,
+		"Compensation" : 0.0,
+		"CutNumbers" : 1,
+		"LeftDist" : 5.0,
+		"Mode" : 2,
+		"Nozzels" : 1,
+		"PartGap" : 5.0,
+		"RightDist" : 5.0,
+		"TopDist" : 5.0
+	},
+	"parts" : 
+	[
+		{
+			"basepoint" : 
+			{
+				"angle1" : 0.0,
+				"angle2" : 0.0,
+				"radius" : 0.0,
+				"x" : 0.0,
+				"y" : 0.0
+			},
+			"contours" : 
+			[
+				{
+					"bclose" : true,
+					"points" : 
+					[
+						{
+							"angle1" : 0.0,
+							"angle2" : 0.0,
+							"radius" : 0.0,
+							"x" : 0.0,
+							"y" : 0.0
+						},
+						{
+							"angle1" : 0.0,
+							"angle2" : 0.0,
+							"radius" : 0.0,
+							"x" : 0.0,
+							"y" : 890.0
+						},
+						{
+							"angle1" : 0.0,
+							"angle2" : 0.0,
+							"radius" : 0.0,
+							"x" : 12840.0,
+							"y" : 890.0
+						},
+						{
+							"angle1" : 0.0,
+							"angle2" : 0.0,
+							"radius" : 0.0,
+							"x" : 12840.0,
+							"y" : 0.0
+						}
+					]
+				}
+			],
+			"id" : "14",
+			"marks" : "",
+			"partinfs" : 
+			{
+				"canmirror" : "0",
+				"priority" : "50",
+				"rotation" : "1"
+			},
+			"quantity" : 3,
+			"unclosedcutlines" : ""
+		},
+		{
+			"basepoint" : 
+			{
+				"angle1" : 0.0,
+				"angle2" : 0.0,
+				"radius" : 0.0,
+				"x" : 0.0,
+				"y" : 0.0
+			},
+			"contours" : 
+			[
+				{
+					"bclose" : true,
+					"points" : 
+					[
+						{
+							"angle1" : 0.0,
+							"angle2" : 0.0,
+							"radius" : 0.0,
+							"x" : 0.0,
+							"y" : 0.0
+						},
+						{
+							"angle1" : 0.0,
+							"angle2" : 0.0,
+							"radius" : 0.0,
+							"x" : 0.0,
+							"y" : 890.0
+						},
+						{
+							"angle1" : 0.0,
+							"angle2" : 0.0,
+							"radius" : 0.0,
+							"x" : 12820.0,
+							"y" : 890.0
+						},
+						{
+							"angle1" : 0.0,
+							"angle2" : 0.0,
+							"radius" : 0.0,
+							"x" : 12820.0,
+							"y" : 0.0
+						}
+					]
+				}
+			],
+			"id" : "15",
+			"marks" : "",
+			"partinfs" : 
+			{
+				"canmirror" : "0",
+				"priority" : "50",
+				"rotation" : "1"
+			},
+			"quantity" : 2,
+			"unclosedcutlines" : ""
+		},
+		{
+			"basepoint" : 
+			{
+				"angle1" : 0.0,
+				"angle2" : 0.0,
+				"radius" : 0.0,
+				"x" : 0.0,
+				"y" : 0.0
+			},
+			"contours" : 
+			[
+				{
+					"bclose" : true,
+					"points" : 
+					[
+						{
+							"angle1" : 0.0,
+							"angle2" : 0.0,
+							"radius" : 0.0,
+							"x" : 0.0,
+							"y" : 0.0
+						},
+						{
+							"angle1" : 0.0,
+							"angle2" : 0.0,
+							"radius" : 0.0,
+							"x" : 0.0,
+							"y" : 200.0
+						},
+						{
+							"angle1" : 0.0,
+							"angle2" : 0.0,
+							"radius" : 0.0,
+							"x" : 6250.0,
+							"y" : 200.0
+						},
+						{
+							"angle1" : 0.0,
+							"angle2" : 0.0,
+							"radius" : 0.0,
+							"x" : 6250.0,
+							"y" : 0.0
+						}
+					]
+				}
+			],
+			"id" : "16",
+			"marks" : "",
+			"partinfs" : 
+			{
+				"canmirror" : "0",
+				"priority" : "50",
+				"rotation" : "1"
+			},
+			"quantity" : 5,
+			"unclosedcutlines" : ""
+		},
+		{
+			"basepoint" : 
+			{
+				"angle1" : 0.0,
+				"angle2" : 0.0,
+				"radius" : 0.0,
+				"x" : 0.0,
+				"y" : 0.0
+			},
+			"contours" : 
+			[
+				{
+					"bclose" : true,
+					"points" : 
+					[
+						{
+							"angle1" : 0.0,
+							"angle2" : 0.0,
+							"radius" : 0.0,
+							"x" : 0.0,
+							"y" : 0.0
+						},
+						{
+							"angle1" : 0.0,
+							"angle2" : 0.0,
+							"radius" : 0.0,
+							"x" : 0.0,
+							"y" : 250.0
+						},
+						{
+							"angle1" : 0.0,
+							"angle2" : 0.0,
+							"radius" : 0.0,
+							"x" : 6200.0,
+							"y" : 250.0
+						},
+						{
+							"angle1" : 0.0,
+							"angle2" : 0.0,
+							"radius" : 0.0,
+							"x" : 6200.0,
+							"y" : 0.0
+						}
+					]
+				}
+			],
+			"id" : "18",
+			"marks" : "",
+			"partinfs" : 
+			{
+				"canmirror" : "0",
+				"priority" : "50",
+				"rotation" : "1"
+			},
+			"quantity" : 5,
+			"unclosedcutlines" : ""
+		}
+	],
+	"plates" : 
+	[
+		{
+			"contours" : 
+			[
+				{
+					"bclose" : true,
+					"points" : 
+					[
+						{
+							"angle1" : 0.0,
+							"angle2" : 0.0,
+							"radius" : 0.0,
+							"x" : 0.0,
+							"y" : -0.0
+						},
+						{
+							"angle1" : 0.0,
+							"angle2" : 0.0,
+							"radius" : 0.0,
+							"x" : 0.0,
+							"y" : -2800.0
+						},
+						{
+							"angle1" : 0.0,
+							"angle2" : 0.0,
+							"radius" : 0.0,
+							"x" : 12900.0,
+							"y" : -2800.0
+						},
+						{
+							"angle1" : 0.0,
+							"angle2" : 0.0,
+							"radius" : 0.0,
+							"x" : 12900.0,
+							"y" : -0.0
+						}
+					]
+				}
+			],
+			"guid" : "377E6383-D13C-4cff-9BE6-1537893FC754",
+			"id" : "9",
+			"partinfs" : "",
+			"quantity" : 2
+		},
+		{
+			"contours" : 
+			[
+				{
+					"bclose" : true,
+					"points" : 
+					[
+						{
+							"angle1" : 0.0,
+							"angle2" : 0.0,
+							"radius" : 0.0,
+							"x" : 0.0,
+							"y" : -0.0
+						},
+						{
+							"angle1" : 0.0,
+							"angle2" : 0.0,
+							"radius" : 0.0,
+							"x" : 0.0,
+							"y" : -2300.0
+						},
+						{
+							"angle1" : 0.0,
+							"angle2" : 0.0,
+							"radius" : 0.0,
+							"x" : 6300.0,
+							"y" : -2300.0
+						},
+						{
+							"angle1" : 0.0,
+							"angle2" : 0.0,
+							"radius" : 0.0,
+							"x" : 6300.0,
+							"y" : -0.0
+						}
+					]
+				}
+			],
+			"guid" : "42978822-A4AF-43d3-A8AF-ECD7E3A3FDC0",
+			"id" : "10",
+			"partinfs" : "",
+			"quantity" : 1
+		}
+	]
+}

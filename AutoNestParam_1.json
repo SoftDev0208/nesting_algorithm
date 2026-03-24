@@ -1,0 +1,182 @@
+ {
+	"options" : 
+	{
+		"BottomDist" : 5.0,
+		"CarryArc" : false,
+		"ComAngle" : 90.0,
+		"CombinFirst" : true,
+		"CombineMinLength" : 5.0,
+		"CombineMode" : 1,
+		"Compensation" : 0.0,
+		"CutNumbers" : 1,
+		"LeftDist" : 5.0,
+		"Mode" : 2,
+		"Nozzels" : 1,
+		"PartGap" : 5.0,
+		"RightDist" : 5.0,
+		"TopDist" : 5.0
+	},
+	"parts" : 
+	[
+		{
+			"basepoint" : 
+			{
+				"angle1" : 0.0,
+				"angle2" : 0.0,
+				"radius" : 0.0,
+				"x" : 0.0,
+				"y" : 0.0
+			},
+			"contours" : 
+			[
+				{
+					"bclose" : true,
+					"points" : 
+					[
+						{
+							"angle1" : 0.0,
+							"angle2" : 0.0,
+							"radius" : 0.0,
+							"x" : 0.0,
+							"y" : 0.0
+						},
+						{
+							"angle1" : 0.0,
+							"angle2" : 0.0,
+							"radius" : 0.0,
+							"x" : 0.0,
+							"y" : 50.0
+						},
+						{
+							"angle1" : 0.0,
+							"angle2" : 0.0,
+							"radius" : 0.0,
+							"x" : 368.0,
+							"y" : 50.0
+						},
+						{
+							"angle1" : 0.0,
+							"angle2" : 0.0,
+							"radius" : 0.0,
+							"x" : 368.0,
+							"y" : 0.0
+						}
+					]
+				}
+			],
+			"id" : "1",
+			"marks" : "",
+			"partinfs" : 
+			{
+				"canmirror" : "0",
+				"priority" : "50",
+				"rotation" : "1"
+			},
+			"quantity" : 20,
+			"unclosedcutlines" : ""
+		},
+		{
+			"basepoint" : 
+			{
+				"angle1" : 0.0,
+				"angle2" : 0.0,
+				"radius" : 0.0,
+				"x" : 0.0,
+				"y" : 0.0
+			},
+			"contours" : 
+			[
+				{
+					"bclose" : true,
+					"points" : 
+					[
+						{
+							"angle1" : 0.0,
+							"angle2" : 0.0,
+							"radius" : 0.0,
+							"x" : 0.0,
+							"y" : 0.0
+						},
+						{
+							"angle1" : 0.0,
+							"angle2" : 0.0,
+							"radius" : 0.0,
+							"x" : 100.0,
+							"y" : 0.0
+						},
+						{
+							"angle1" : 0.0,
+							"angle2" : 0.0,
+							"radius" : 0.0,
+							"x" : 100.0,
+							"y" : 30.0
+						},
+						{
+							"angle1" : 0.0,
+							"angle2" : 0.0,
+							"radius" : 0.0,
+							"x" : 0.0,
+							"y" : 30.0
+						}
+					]
+				}
+			],
+			"id" : "2",
+			"marks" : "",
+			"partinfs" : 
+			{
+				"canmirror" : "0",
+				"priority" : "50",
+				"rotation" : "1"
+			},
+			"quantity" : 20,
+			"unclosedcutlines" : ""
+		}
+	],
+	"plates" : 
+	[
+		{
+			"contours" : 
+			[
+				{
+					"bclose" : true,
+					"points" : 
+					[
+						{
+							"angle1" : 0.0,
+							"angle2" : 0.0,
+							"radius" : 0.0,
+							"x" : 0.0,
+							"y" : -0.0
+						},
+						{
+							"angle1" : 0.0,
+							"angle2" : 0.0,
+							"radius" : 0.0,
+							"x" : 0.0,
+							"y" : -700.0
+						},
+						{
+							"angle1" : 0.0,
+							"angle2" : 0.0,
+							"radius" : 0.0,
+							"x" : 1000.0,
+							"y" : -700.0
+						},
+						{
+							"angle1" : 0.0,
+							"angle2" : 0.0,
+							"radius" : 0.0,
+							"x" : 1000.0,
+							"y" : -0.0
+						}
+					]
+				}
+			],
+			"guid" : "DD02A9D2-610A-4a22-B140-AB6D5EF860B6",
+			"id" : "6",
+			"partinfs" : "",
+			"quantity" : 10
+		}
+	]
+}
