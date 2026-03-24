@@ -12,7 +12,7 @@
 		"LeftDist" : 5.0,
 		"Mode" : 2,
 		"Nozzels" : 1,
-		"PartGap" : 2.0,
+		"PartGap" : 5.0,
 		"RightDist" : 5.0,
 		"TopDist" : 5.0
 	},
@@ -86,7 +86,7 @@
 				"priority" : "50",
 				"rotation" : "1"
 			},
-			"quantity" : 1,
+			"quantity" : 300,
 			"unclosedcutlines" : ""
 		},
 		{
@@ -157,7 +157,7 @@
 				"priority" : "50",
 				"rotation" : "1"
 			},
-			"quantity" : 1,
+			"quantity" : 198,
 			"unclosedcutlines" : ""
 		},
 		{
@@ -228,7 +228,7 @@
 				"priority" : "50",
 				"rotation" : "1"
 			},
-			"quantity" : 1,
+			"quantity" : 132,
 			"unclosedcutlines" : ""
 		},
 		{
@@ -285,7 +285,7 @@
 				"priority" : "50",
 				"rotation" : "1"
 			},
-			"quantity" : 1,
+			"quantity" : 84,
 			"unclosedcutlines" : ""
 		},
 		{
@@ -342,7 +342,7 @@
 				"priority" : "50",
 				"rotation" : "1"
 			},
-			"quantity" : 1,
+			"quantity" : 137,
 			"unclosedcutlines" : ""
 		},
 		{
@@ -399,7 +399,7 @@
 				"priority" : "50",
 				"rotation" : "1"
 			},
-			"quantity" : 1,
+			"quantity" : 68,
 			"unclosedcutlines" : ""
 		},
 		{
@@ -456,7 +456,7 @@
 				"priority" : "50",
 				"rotation" : "1"
 			},
-			"quantity" : 1,
+			"quantity" : 225,
 			"unclosedcutlines" : ""
 		},
 		{
@@ -513,7 +513,7 @@
 				"priority" : "50",
 				"rotation" : "1"
 			},
-			"quantity" : 1,
+			"quantity" : 92,
 			"unclosedcutlines" : ""
 		},
 		{
@@ -570,7 +570,7 @@
 				"priority" : "50",
 				"rotation" : "1"
 			},
-			"quantity" : 1,
+			"quantity" : 356,
 			"unclosedcutlines" : ""
 		},
 		{
@@ -627,7 +627,7 @@
 				"priority" : "50",
 				"rotation" : "1"
 			},
-			"quantity" : 1,
+			"quantity" : 100,
 			"unclosedcutlines" : ""
 		},
 		{
@@ -684,7 +684,7 @@
 				"priority" : "50",
 				"rotation" : "1"
 			},
-			"quantity" : 1,
+			"quantity" : 147,
 			"unclosedcutlines" : ""
 		},
 		{
@@ -741,7 +741,7 @@
 				"priority" : "50",
 				"rotation" : "1"
 			},
-			"quantity" : 1,
+			"quantity" : 40,
 			"unclosedcutlines" : ""
 		},
 		{
@@ -798,7 +798,7 @@
 				"priority" : "50",
 				"rotation" : "1"
 			},
-			"quantity" : 1,
+			"quantity" : 64,
 			"unclosedcutlines" : ""
 		},
 		{
@@ -855,7 +855,7 @@
 				"priority" : "50",
 				"rotation" : "1"
 			},
-			"quantity" : 1,
+			"quantity" : 420,
 			"unclosedcutlines" : ""
 		},
 		{
@@ -912,7 +912,7 @@
 				"priority" : "50",
 				"rotation" : "1"
 			},
-			"quantity" : 1,
+			"quantity" : 163,
 			"unclosedcutlines" : ""
 		},
 		{
@@ -969,7 +969,7 @@
 				"priority" : "50",
 				"rotation" : "1"
 			},
-			"quantity" : 1,
+			"quantity" : 84,
 			"unclosedcutlines" : ""
 		},
 		{
@@ -1026,7 +1026,7 @@
 				"priority" : "50",
 				"rotation" : "1"
 			},
-			"quantity" : 1,
+			"quantity" : 80,
 			"unclosedcutlines" : ""
 		},
 		{
@@ -1083,7 +1083,7 @@
 				"priority" : "50",
 				"rotation" : "1"
 			},
-			"quantity" : 1,
+			"quantity" : 48,
 			"unclosedcutlines" : ""
 		},
 		{
@@ -1140,7 +1140,7 @@
 				"priority" : "50",
 				"rotation" : "1"
 			},
-			"quantity" : 1,
+			"quantity" : 44,
 			"unclosedcutlines" : ""
 		},
 		{
@@ -1197,7 +1197,7 @@
 				"priority" : "50",
 				"rotation" : "1"
 			},
-			"quantity" : 1,
+			"quantity" : 94,
 			"unclosedcutlines" : ""
 		},
 		{
@@ -1268,7 +1268,7 @@
 				"priority" : "50",
 				"rotation" : "1"
 			},
-			"quantity" : 1,
+			"quantity" : 462,
 			"unclosedcutlines" : ""
 		},
 		{
@@ -1339,7 +1339,7 @@
 				"priority" : "50",
 				"rotation" : "1"
 			},
-			"quantity" : 1,
+			"quantity" : 462,
 			"unclosedcutlines" : ""
 		},
 		{
@@ -1410,7 +1410,7 @@
 				"priority" : "50",
 				"rotation" : "1"
 			},
-			"quantity" : 1,
+			"quantity" : 42,
 			"unclosedcutlines" : ""
 		},
 		{
@@ -1481,7 +1481,7 @@
 				"priority" : "50",
 				"rotation" : "1"
 			},
-			"quantity" : 1,
+			"quantity" : 42,
 			"unclosedcutlines" : ""
 		},
 		{
@@ -1538,7 +1538,7 @@
 				"priority" : "50",
 				"rotation" : "1"
 			},
-			"quantity" : 1,
+			"quantity" : 128,
 			"unclosedcutlines" : ""
 		},
 		{
@@ -1651,7 +1651,7 @@
 				"priority" : "50",
 				"rotation" : "1"
 			},
-			"quantity" : 1,
+			"quantity" : 262,
 			"unclosedcutlines" : ""
 		},
 		{
@@ -1750,7 +1750,7 @@
 				"priority" : "50",
 				"rotation" : "1"
 			},
-			"quantity" : 1,
+			"quantity" : 55,
 			"unclosedcutlines" : ""
 		},
 		{
@@ -1821,7 +1821,7 @@
 				"priority" : "50",
 				"rotation" : "1"
 			},
-			"quantity" : 1,
+			"quantity" : 62,
 			"unclosedcutlines" : ""
 		},
 		{
@@ -1878,7 +1878,7 @@
 				"priority" : "50",
 				"rotation" : "1"
 			},
-			"quantity" : 1,
+			"quantity" : 557,
 			"unclosedcutlines" : ""
 		},
 		{
@@ -1935,13 +1935,54 @@
 				"priority" : "50",
 				"rotation" : "1"
 			},
-			"quantity" : 1,
+			"quantity" : 60,
 			"unclosedcutlines" : ""
 		}
+	],
+	"plates" : 
+	[
+		{
+			"contours" : 
+			[
+				{
+					"bclose" : true,
+					"points" : 
+					[
+						{
+							"angle1" : 0.0,
+							"angle2" : 0.0,
+							"radius" : 0.0,
+							"x" : 0.0,
+							"y" : -0.0
+						},
+						{
+							"angle1" : 0.0,
+							"angle2" : 0.0,
+							"radius" : 0.0,
+							"x" : 0.0,
+							"y" : -3000.0
+						},
+						{
+							"angle1" : 0.0,
+							"angle2" : 0.0,
+							"radius" : 0.0,
+							"x" : 15000.0,
+							"y" : -3000.0
+						},
+						{
+							"angle1" : 0.0,
+							"angle2" : 0.0,
+							"radius" : 0.0,
+							"x" : 15000.0,
+							"y" : -0.0
+						}
+					]
+				}
+			],
+			"guid" : "138E9990-5453-45d6-B9A8-A814226979EB",
+			"id" : "5",
+			"partinfs" : "",
+			"quantity" : 10
+		}
 	]
-	
 }
-
-
-
-

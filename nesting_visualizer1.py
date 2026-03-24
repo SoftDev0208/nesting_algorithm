@@ -1,9 +1,10 @@
 import json
 import math
 import tkinter as tk
-from tkinter import filedialog, messagebox
+from tkinter import filedialog, messagebox, ttk
 
 import matplotlib.pyplot as plt
+from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg, NavigationToolbar2Tk
 import numpy as np
 from shapely.affinity import rotate, translate
 from shapely.geometry import Point, MultiPolygon, GeometryCollection
@@ -46,6 +47,103 @@ def load_json(json_path):
 # -----------------------------
 # Geometry conversion
 # -----------------------------
+
+
+
+def _find_numeric_value_case_insensitive(obj, target_keys):
+    """Recursively search for the first numeric value whose key matches target_keys."""
+    if isinstance(obj, dict):
+        for key, value in obj.items():
+            key_norm = str(key).strip().lower().replace("_", "")
+            if key_norm in target_keys and isinstance(value, (int, float)):
+                return float(value)
+        for value in obj.values():
+            found = _find_numeric_value_case_insensitive(value, target_keys)
+            if found is not None:
+                return found
+    elif isinstance(obj, list):
+        for item in obj:
+            found = _find_numeric_value_case_insensitive(item, target_keys)
+            if found is not None:
+                return found
+    return None
+
+
+def extract_plate_size(data):
+    """
+    Best-effort extraction of plate width/height from the JSON payload.
+    Supports common shapes like:
+      - {"plate": {"width": 1000, "height": 700}}
+      - {"plates": [{"width": 1000, "height": 700}]}
+      - {"stock": {"w": 1000, "h": 700}}
+      - {"plates": [{"contours": [{"points": [...]}]}]}  # infer from contour bounds
+      - nested fields with Chinese aliases.
+    """
+    width_keys = {
+        "width", "platewidth", "sheetwidth", "boardwidth", "stockwidth",
+        "w", "xsize", "sizex", "lenx", "platew",
+        "板宽", "板材宽", "宽",
+    }
+    height_keys = {
+        "height", "plateheight", "sheetheight", "boardheight", "stockheight",
+        "h", "ysize", "sizey", "leny", "plateh",
+        "板高", "板材高", "高",
+    }
+
+    def _contour_bounds_size(obj):
+        if not isinstance(obj, dict):
+            return None, None
+        contours = obj.get("contours")
+        if not isinstance(contours, list) or not contours:
+            return None, None
+
+        xs = []
+        ys = []
+        for contour in contours:
+            if not isinstance(contour, dict):
+                continue
+            points = contour.get("points")
+            if not isinstance(points, list):
+                continue
+            for pt in points:
+                if not isinstance(pt, dict):
+                    continue
+                x = pt.get("x")
+                y = pt.get("y")
+                if isinstance(x, (int, float)) and isinstance(y, (int, float)):
+                    xs.append(float(x))
+                    ys.append(float(y))
+
+        if len(xs) >= 2 and len(ys) >= 2:
+            return max(xs) - min(xs), max(ys) - min(ys)
+        return None, None
+
+    preferred_containers = []
+    if isinstance(data, dict):
+        for container_key in ("plate", "plates", "stock", "stocks", "sheet", "sheets", "board", "boards", "material", "materials"):
+            if container_key in data:
+                preferred_containers.append(data[container_key])
+
+    search_spaces = preferred_containers + [data]
+
+    for space in search_spaces:
+        width = _find_numeric_value_case_insensitive(space, width_keys)
+        height = _find_numeric_value_case_insensitive(space, height_keys)
+        if width is not None and height is not None:
+            return float(width), float(height)
+
+        if isinstance(space, list):
+            for item in space:
+                width, height = _contour_bounds_size(item)
+                if width is not None and height is not None:
+                    return float(width), float(height)
+        else:
+            width, height = _contour_bounds_size(space)
+            if width is not None and height is not None:
+                return float(width), float(height)
+
+    return None, None
+
 def part_to_polygon(part):
     pts = part["contours"][0]["points"]
 
@@ -3364,14 +3462,16 @@ def place_parts_with_existing(parts, plate_poly, strategy=None, _cache=None):
     return layout
 
 # -----------------------------
-# Plot arrangement
+# Plot arrangement / UI helpers
 # -----------------------------
-def plot_arrangement(placed_parts, plate_poly):
-    fig, ax = plt.subplots(figsize=(12, 6))
+def create_layout_figure(placed_parts, plate_poly, title="排样结果"):
+    fig, ax = plt.subplots(figsize=(8.2, 4.8), dpi=120)
+    fig.patch.set_facecolor("#f2f2f2")
+    ax.set_facecolor("white")
     ax.set_aspect("equal")
 
     xs, ys = plate_poly.exterior.xy
-    ax.plot(xs, ys, "black")
+    ax.plot(xs, ys, color="black", linewidth=1.2)
 
     for p in placed_parts:
         poly = p["poly"]
@@ -3379,11 +3479,11 @@ def plot_arrangement(placed_parts, plate_poly):
 
         for g in polys:
             xs, ys = g.exterior.xy
-            ax.plot(xs, ys, "b")
+            ax.fill(xs, ys, facecolor="#09a51a", edgecolor="black", linewidth=0.6)
 
         for g in p.get("display_polys", []) or []:
             xs, ys = g.exterior.xy
-            ax.plot(xs, ys, "black")
+            ax.plot(xs, ys, color="black", linewidth=0.5)
 
         c = poly.centroid
         ax.text(
@@ -3392,29 +3492,151 @@ def plot_arrangement(placed_parts, plate_poly):
             str(p["id"]),
             ha="center",
             va="center",
-            fontsize=8,
-            color="green",
+            fontsize=5.5,
+            color="black",
         )
 
-    ax.set_title("Layout Filled According to Geometry-Role Template")
-    plt.xlabel("X")
-    plt.ylabel("Y")
+    minx, miny, maxx, maxy = plate_poly.bounds
+    pad_x = max((maxx - minx) * 0.04, 1.0)
+    pad_y = max((maxy - miny) * 0.04, 1.0)
+    ax.set_xlim(minx - pad_x, maxx + pad_x)
+    ax.set_ylim(miny - pad_y, maxy + pad_y)
+    ax.set_xticks([])
+    ax.set_yticks([])
+    for spine in ax.spines.values():
+        spine.set_visible(False)
+    ax.set_title(title, fontsize=10, loc="left", pad=8)
+    fig.tight_layout(pad=0.5)
+    return fig, ax
+
+
+def plot_arrangement(placed_parts, plate_poly):
+    fig, _ = create_layout_figure(placed_parts, plate_poly)
     plt.show()
+    return fig
 
 
 # -----------------------------
-# Summary table
+# Summary / stats helpers
 # -----------------------------
-def generate_table(placed_parts):
+def summarize_layout(placed_parts):
     summary = {}
     for p in placed_parts:
         key = get_part_key(p)
         count = int(p.get("unit_count", 1))
         summary[key] = summary.get(key, 0) + count
+    return summary
 
+
+def generate_table(placed_parts):
+    summary = summarize_layout(placed_parts)
     print(f"{'ID':<12} {'Placed Count':<12}")
     for pid, count in summary.items():
         print(f"{pid:<12} {count:<12}")
+
+
+def compute_layout_statistics(parts, placed_parts, plate_poly):
+    expected = expected_part_count(parts)
+    placed = placed_part_count(placed_parts)
+    plate_area = plate_poly.area if hasattr(plate_poly, 'area') else 0.0
+    used_area = sum(p["poly"].area for p in placed_parts)
+    utilization = (used_area / plate_area * 100.0) if plate_area > 1e-9 else 0.0
+    nesting_kinds = len({get_part_key(p) for p in placed_parts})
+    bbox_area = overall_bbox_area(placed_parts)
+    fill_ratio = layout_fill_ratio(placed_parts) * 100.0
+    waste_area = layout_waste_area(placed_parts)
+    return {
+        "placed": placed,
+        "expected": expected,
+        "utilization": utilization,
+        "part_kinds": nesting_kinds,
+        "layout_count": 1,
+        "bbox_area": bbox_area,
+        "fill_ratio": fill_ratio,
+        "waste_area": waste_area,
+    }
+
+
+def format_plan_name(candidate, index):
+    stats = candidate["stats"]
+    return (
+        f"方案{index + 1} | {candidate['name']} | "
+        f"{stats['placed']}/{stats['expected']} | 利用率 {stats['utilization']:.2f}%"
+    )
+
+
+def generate_candidate_layouts(parts, plate_poly):
+    solve_cache = {}
+    candidates = []
+    seen = set()
+
+    def add_candidate(name, builder):
+        try:
+            layout = builder()
+        except NestingFailed as exc:
+            layout = exc.best_layout or []
+        except Exception as exc:
+            print(f"Candidate '{name}' failed: {exc}")
+            return
+
+        if not layout:
+            return
+
+        fingerprint = tuple(sorted(
+            (p["id"], round(p["x"], 4), round(p["y"], 4), int(round(p.get("angle", 0))), int(p.get("unit_count", 1)))
+            for p in layout
+        ))
+        if fingerprint in seen:
+            return
+        seen.add(fingerprint)
+
+        stats = compute_layout_statistics(parts, layout, plate_poly)
+        candidates.append({
+            "name": name,
+            "layout": layout,
+            "stats": stats,
+            "summary": summarize_layout(layout),
+        })
+
+    strategies = [
+        ("默认优先级", lambda: place_parts_with_existing(parts, plate_poly, _cache=solve_cache)),
+        ("反向顺序", lambda: place_parts_with_existing(parts, plate_poly, strategy={
+            "name": "reverse_order",
+            "side_bar_order": "reverse",
+            "trapezoid_order": "reverse",
+            "filler_order": "reverse",
+        }, _cache=solve_cache)),
+        ("组内大件优先", lambda: place_parts_with_existing(parts, plate_poly, strategy={
+            "name": "largest_first_inside_groups",
+            "side_bar_order": "largest_first",
+            "trapezoid_order": "largest_first",
+            "filler_order": "largest_first",
+        }, _cache=solve_cache)),
+        ("旋转优先", lambda: place_parts_with_existing(parts, plate_poly, strategy={
+            "name": "rotate_first",
+            "anchor_angle_order": [90, 0],
+            "fill_angle_order": [90, 0],
+            "top_angles": [90, 0],
+            "side_angles": [90, 0],
+            "filler_angles": [90, 0],
+        }, _cache=solve_cache)),
+        ("完整求解", lambda: nest_parts_with_full_fit(parts, plate_poly)),
+    ]
+
+    for name, builder in strategies:
+        add_candidate(name, builder)
+
+    candidates.sort(key=lambda c: (
+        c["stats"]["placed"],
+        c["stats"]["utilization"],
+        c["stats"]["fill_ratio"],
+        -c["stats"]["waste_area"],
+    ), reverse=True)
+
+    for idx, cand in enumerate(candidates):
+        cand["display_name"] = format_plan_name(cand, idx)
+
+    return candidates
 
 
 # -----------------------------
@@ -3423,83 +3645,327 @@ def generate_table(placed_parts):
 class NestingApp:
     def __init__(self, root):
         self.root = root
-        self.root.title("2D Nesting with Full-Fit Validation")
-
-        tk.Label(root, text="Layout Width:").grid(row=0, column=0)
-        tk.Label(root, text="Layout Height:").grid(row=1, column=0)
-
-        self.width_entry = tk.Entry(root)
-        self.height_entry = tk.Entry(root)
-        self.width_entry.grid(row=0, column=1)
-        self.height_entry.grid(row=1, column=1)
-
-        self.load_button = tk.Button(root, text="Load JSON", command=self.load_json_file)
-        self.load_button.grid(row=2, column=0, columnspan=2, pady=5)
-
-        self.run_button = tk.Button(root, text="Run Nesting", command=self.run_nesting)
-        self.run_button.grid(row=3, column=0, columnspan=2, pady=5)
+        self.root.title("Nest AutoNesting UI")
+        self.root.geometry("1500x920")
+        self.root.configure(bg="#efefef")
 
         self.parts = None
         self.plate_poly = None
+        self.plate_width = None
+        self.plate_height = None
+        self.candidates = []
+        self.selected_candidate = None
+        self.current_figure = None
+        self.current_canvas = None
+        self.current_toolbar = None
+
+        self._configure_style()
+        self._build_ui()
+
+    def _configure_style(self):
+        style = ttk.Style()
+        try:
+            style.theme_use("clam")
+        except Exception:
+            pass
+        style.configure("App.TFrame", background="#efefef")
+        style.configure("Card.TFrame", background="#efefef")
+        style.configure("Summary.TLabel", background="#efefef", font=("Microsoft YaHei", 11))
+        style.configure("Small.TLabel", background="#efefef", font=("Microsoft YaHei", 10))
+        style.configure("Blue.TLabel", background="#efefef", foreground="#2f74c8", font=("Microsoft YaHei", 10))
+        style.configure("Section.TLabelframe", background="#efefef")
+        style.configure("Section.TLabelframe.Label", background="#efefef", font=("Microsoft YaHei", 10))
+        style.configure("Green.Horizontal.TProgressbar", troughcolor="#f5f5f5", background="#18bf2f", lightcolor="#49d95c", darkcolor="#18bf2f", bordercolor="#bfbfbf")
+        style.configure("Treeview", rowheight=28, font=("Microsoft YaHei", 10))
+        style.configure("Treeview.Heading", font=("Microsoft YaHei", 10))
+
+    def _build_ui(self):
+        self.root.rowconfigure(1, weight=1)
+        self.root.rowconfigure(2, weight=0)
+        self.root.columnconfigure(0, weight=1)
+
+        top = ttk.Frame(self.root, padding=(14, 10, 14, 8), style="App.TFrame")
+        top.grid(row=0, column=0, sticky="ew")
+        top.columnconfigure(0, weight=1)
+
+        ctrl = ttk.Frame(top, style="App.TFrame")
+        ctrl.grid(row=0, column=0, sticky="ew", pady=(0, 8))
+        for col in range(12):
+            ctrl.columnconfigure(col, weight=0)
+        ctrl.columnconfigure(11, weight=1)
+
+        ttk.Label(ctrl, text="Plate Size:", style="Small.TLabel").grid(row=0, column=0, sticky="w")
+        self.plate_size_var = tk.StringVar(value="Not loaded")
+        ttk.Label(ctrl, textvariable=self.plate_size_var, style="Blue.TLabel").grid(row=0, column=1, sticky="w", padx=(4, 18))
+        ttk.Button(ctrl, text="Load JSON", command=self.load_json_file).grid(row=0, column=4, padx=4)
+        ttk.Button(ctrl, text="Run Nesting", command=self.run_nesting).grid(row=0, column=5, padx=4)
+        ttk.Button(ctrl, text="Confirm Plan", command=self.confirm_plan).grid(row=0, column=6, padx=4)
+
+        self.header_var = tk.StringVar(value="第0次优化，已排入0个，平均利用率0.00%")
+        ttk.Label(top, textvariable=self.header_var, style="Summary.TLabel").grid(row=1, column=0, sticky="w", pady=(0, 6))
+
+        progress_wrap = tk.Frame(top, bg="#f7f7f7", highlightbackground="#bdbdbd", highlightthickness=1)
+        progress_wrap.grid(row=2, column=0, sticky="ew")
+        progress_wrap.columnconfigure(0, weight=1)
+        self.progress_var = tk.DoubleVar(value=0.0)
+        self.progress = ttk.Progressbar(progress_wrap, orient="horizontal", mode="determinate", variable=self.progress_var, maximum=100, style="Green.Horizontal.TProgressbar")
+        self.progress.grid(row=0, column=0, sticky="ew", padx=2, pady=2, ipady=8)
+        self.progress_label = tk.Label(progress_wrap, text="0%", bg="#f7f7f7", fg="black", font=("Microsoft YaHei", 11))
+        self.progress_label.place(relx=0.5, rely=0.5, anchor="center")
+
+        summary_line = ttk.Frame(top, style="App.TFrame")
+        summary_line.grid(row=3, column=0, sticky="ew", pady=(10, 0))
+        self.result_title_var = tk.StringVar(value="◎ 排样结果1：")
+        self.summary_util_var = tk.StringVar(value="0.00%")
+        self.summary_parts_var = tk.StringVar(value="0/0")
+        self.summary_kinds_var = tk.StringVar(value="0")
+        self.summary_layout_count_var = tk.StringVar(value="0")
+        ttk.Label(summary_line, textvariable=self.result_title_var, style="Small.TLabel").pack(side=tk.LEFT)
+        ttk.Label(summary_line, text="总利用率", style="Small.TLabel").pack(side=tk.LEFT, padx=(0, 4))
+        ttk.Label(summary_line, textvariable=self.summary_util_var, style="Blue.TLabel").pack(side=tk.LEFT, padx=(0, 14))
+        ttk.Label(summary_line, text="零件总数", style="Small.TLabel").pack(side=tk.LEFT, padx=(0, 4))
+        ttk.Label(summary_line, textvariable=self.summary_parts_var, style="Blue.TLabel").pack(side=tk.LEFT, padx=(0, 14))
+        ttk.Label(summary_line, text="排版种类", style="Small.TLabel").pack(side=tk.LEFT, padx=(0, 4))
+        ttk.Label(summary_line, textvariable=self.summary_kinds_var, style="Blue.TLabel").pack(side=tk.LEFT, padx=(0, 14))
+        ttk.Label(summary_line, text="排版总数", style="Small.TLabel").pack(side=tk.LEFT, padx=(0, 4))
+        ttk.Label(summary_line, textvariable=self.summary_layout_count_var, style="Blue.TLabel").pack(side=tk.LEFT)
+
+        main = ttk.Frame(self.root, padding=(12, 6, 12, 8), style="App.TFrame")
+        main.grid(row=1, column=0, sticky="nsew")
+        main.rowconfigure(0, weight=1)
+        main.columnconfigure(0, weight=1)
+        main.columnconfigure(1, weight=0)
+
+        preview_panel = tk.Frame(main, bg="white", highlightbackground="#c6c6c6", highlightthickness=1)
+        preview_panel.grid(row=0, column=0, sticky="nsew", padx=(0, 10))
+        preview_panel.rowconfigure(0, weight=1)
+        preview_panel.columnconfigure(0, weight=1)
+        self.canvas_host = ttk.Frame(preview_panel)
+        self.canvas_host.grid(row=0, column=0, sticky="nsew")
+        self.canvas_host.rowconfigure(0, weight=1)
+        self.canvas_host.columnconfigure(0, weight=1)
+        self.toolbar_frame = ttk.Frame(preview_panel)
+
+        plan_panel = tk.Frame(main, bg="white", highlightbackground="#c6c6c6", highlightthickness=1)
+        plan_panel.grid(row=0, column=1, sticky="ns")
+        plan_panel.rowconfigure(0, weight=1)
+        plan_panel.columnconfigure(0, weight=1)
+        self.plan_tree = ttk.Treeview(
+            plan_panel,
+            columns=("name", "util", "parts", "count", "size"),
+            show="headings",
+            height=14,
+        )
+        headings = [("name", "排样名称", 84), ("util", "利用率(%)", 92), ("parts", "零件数", 72), ("count", "排版数", 72), ("size", "板材尺寸", 180)]
+        for key, title, width in headings:
+            self.plan_tree.heading(key, text=title)
+            self.plan_tree.column(key, width=width, anchor="center")
+        self.plan_tree.column("name", anchor="w")
+        self.plan_tree.grid(row=0, column=0, sticky="nsew")
+        plan_scroll = ttk.Scrollbar(plan_panel, orient="vertical", command=self.plan_tree.yview)
+        plan_scroll.grid(row=0, column=1, sticky="ns")
+        self.plan_tree.configure(yscrollcommand=plan_scroll.set)
+        self.plan_tree.bind("<<TreeviewSelect>>", self.on_plan_select)
+
+        bottom = ttk.Frame(self.root, padding=(12, 0, 12, 12), style="App.TFrame")
+        bottom.grid(row=2, column=0, sticky="ew")
+        bottom.columnconfigure(0, weight=1)
+        ttk.Label(bottom, text="排样结果", style="Summary.TLabel").grid(row=0, column=0, sticky="w", pady=(0, 6))
+
+        self.result_tree = ttk.Treeview(
+            bottom,
+            columns=("result", "util", "parts", "kinds", "count"),
+            show="headings",
+            height=6,
+        )
+        bottom_headings = [("result", "排样结果", 180), ("util", "总利用率(%)", 180), ("parts", "零件总数", 180), ("kinds", "排版种类", 180), ("count", "排版总数", 180)]
+        for key, title, width in bottom_headings:
+            self.result_tree.heading(key, text=title)
+            self.result_tree.column(key, width=width, anchor="center")
+        self.result_tree.column("result", anchor="w")
+        self.result_tree.grid(row=1, column=0, sticky="ew")
+
+        self.status_var = tk.StringVar(value="Ready")
+        ttk.Label(bottom, textvariable=self.status_var, style="Small.TLabel").grid(row=2, column=0, sticky="w", pady=(8, 0))
+
+    def _plate_size_text(self):
+        if self.plate_poly is None:
+            return "-"
+        minx, miny, maxx, maxy = self.plate_poly.bounds
+        return f"{maxx - minx:.2f} * {maxy - miny:.2f}"
 
     def load_json_file(self):
         file_path = filedialog.askopenfilename(filetypes=[("JSON Files", "*.json")])
-        if file_path:
-            self.parts = load_json(file_path)["parts"]
+        if not file_path:
+            return
+
+        try:
+            data = load_json(file_path)
+            self.parts = data["parts"]
+
+            plate_w, plate_h = extract_plate_size(data)
+            self.plate_width = plate_w
+            self.plate_height = plate_h
+            if plate_w is not None and plate_h is not None:
+                self.plate_size_var.set(f"{plate_w:g} x {plate_h:g}")
+            else:
+                self.plate_size_var.set("Not found in JSON")
+
             total_quantity = sum(int(p.get("quantity", 1)) for p in self.parts)
+            size_text = f" | plate {plate_w:g} x {plate_h:g}" if plate_w is not None and plate_h is not None else " | plate size not found in JSON"
+            self.status_var.set(f"Loaded {len(self.parts)} parts / {total_quantity} items{size_text}")
             messagebox.showinfo(
                 "Success",
-                f"Loaded {len(self.parts)} part objects ({total_quantity} total items)",
+                f"Loaded {len(self.parts)} part objects ({total_quantity} total items)"
+                + (f"\nDetected plate size: {plate_w:g} x {plate_h:g}" if plate_w is not None and plate_h is not None else "\nPlate size was not found in JSON."),
             )
+        except Exception as exc:
+            messagebox.showerror("Error", f"Failed to load JSON: {exc}")
 
     def run_nesting(self):
         if self.parts is None:
             messagebox.showerror("Error", "Please load a JSON file first")
             return
 
-        try:
-            w = float(self.width_entry.get())
-            h = float(self.height_entry.get())
-        except ValueError:
-            messagebox.showerror("Error", "Enter valid numeric width and height")
+        if self.plate_width is None or self.plate_height is None:
+            messagebox.showerror("Error", "Plate width and height must come from the JSON file.")
             return
 
-        self.plate_poly = box(0, 0, w, h)
+        self.plate_poly = box(0, 0, float(self.plate_width), float(self.plate_height))
+        self.status_var.set("Calculating candidate nesting plans...")
+        self.root.update_idletasks()
 
         try:
-            placed_parts = nest_parts_with_full_fit(self.parts, self.plate_poly)
-
-            placed = placed_part_count(placed_parts)
-            expected = expected_part_count(self.parts)
-
-            if placed == expected:
-                plot_arrangement(placed_parts, self.plate_poly)
-                generate_table(placed_parts)
-                messagebox.showinfo(
-                    "Nesting Success",
-                    f"All parts were placed successfully: {placed}/{expected}"
-                )
-                return
-
-            # fallback, just in case
-            plot_arrangement(placed_parts, self.plate_poly)
-            generate_table(placed_parts)
-            messagebox.showwarning(
-                "Nesting incomplete",
-                f"Only {placed}/{expected} parts were placed."
-            )
-
-        except NestingFailed as e:
-            if e.best_layout:
-                plot_arrangement(e.best_layout, self.plate_poly)
-                generate_table(e.best_layout)
-
-            messagebox.showwarning(
-                "Nesting incomplete",
-                f"{e}\n\nShowing best result: {e.best_count}/{e.expected_count} parts placed."
-            )
+            self.candidates = generate_candidate_layouts(self.parts, self.plate_poly)
+        except Exception as exc:
+            messagebox.showerror("Error", f"Nesting failed: {exc}")
+            self.status_var.set("Nesting failed")
             return
-       
+
+        for row in self.plan_tree.get_children():
+            self.plan_tree.delete(row)
+        for row in self.result_tree.get_children():
+            self.result_tree.delete(row)
+
+        plate_size_text = self._plate_size_text()
+        for index, candidate in enumerate(self.candidates, start=1):
+            stats = candidate["stats"]
+            plan_name = f"排版{index}"
+            candidate["plan_row_name"] = plan_name
+            iid = f"plan_{index}"
+            self.plan_tree.insert(
+                "",
+                tk.END,
+                iid=iid,
+                values=(
+                    plan_name,
+                    f"{stats['utilization']:.2f}%",
+                    str(stats["placed"]),
+                    str(stats["layout_count"]),
+                    plate_size_text,
+                ),
+            )
+            util_bar = self._bar_text(stats["utilization"])
+            self.result_tree.insert(
+                "",
+                tk.END,
+                iid=f"result_{index}",
+                values=(
+                    f"排样结果{index}",
+                    f"{util_bar}  {stats['utilization']:.2f}%",
+                    f"{stats['placed']}/{stats['expected']}",
+                    str(stats["part_kinds"]),
+                    str(stats["layout_count"]),
+                ),
+            )
+
+        if not self.candidates:
+            messagebox.showwarning("No Result", "No valid nesting result was generated.")
+            self.status_var.set("No result")
+            return
+
+        first_id = self.plan_tree.get_children()[0]
+        self.plan_tree.selection_set(first_id)
+        self.plan_tree.focus(first_id)
+        self.show_candidate(0)
+        self.status_var.set(f"Generated {len(self.candidates)} sorted candidate plan(s)")
+
+    def _bar_text(self, value):
+        filled = max(0, min(12, int(round(value / 100.0 * 12))))
+        return "█" * filled + "░" * (12 - filled)
+
+    def on_plan_select(self, _event=None):
+        selection = self.plan_tree.selection()
+        if not selection:
+            return
+        iid = selection[0]
+        try:
+            index = self.plan_tree.index(iid)
+        except Exception:
+            return
+        self.show_candidate(index)
+
+    def show_candidate(self, index):
+        if index < 0 or index >= len(self.candidates):
+            return
+
+        candidate = self.candidates[index]
+        self.selected_candidate = candidate
+        self._render_candidate(candidate)
+        self._update_header(candidate, index)
+        self._highlight_result_row(index)
+
+    def _render_candidate(self, candidate):
+        if self.current_canvas is not None:
+            self.current_canvas.get_tk_widget().destroy()
+            self.current_canvas = None
+        if self.current_toolbar is not None:
+            self.current_toolbar.destroy()
+            self.current_toolbar = None
+        if self.current_figure is not None:
+            plt.close(self.current_figure)
+            self.current_figure = None
+
+        fig, _ = create_layout_figure(candidate["layout"], self.plate_poly, title="")
+        self.current_figure = fig
+        self.current_canvas = FigureCanvasTkAgg(fig, master=self.canvas_host)
+        self.current_canvas.draw()
+        self.current_canvas.get_tk_widget().grid(row=0, column=0, sticky="nsew")
+
+    def _update_header(self, candidate, index):
+        stats = candidate["stats"]
+        self.header_var.set(f"第{index + 1}次优化，已排入{stats['placed']}个，平均利用率{stats['utilization']:.2f}%")
+        self.progress_var.set(stats["fill_ratio"])
+        self.progress_label.configure(text=f"{stats['fill_ratio']:.0f}%")
+        self.result_title_var.set(f"◎ 排样结果{index + 1}：")
+        self.summary_util_var.set(f"{stats['utilization']:.2f}%")
+        self.summary_parts_var.set(f"{stats['placed']}/{stats['expected']}")
+        self.summary_kinds_var.set(str(stats["part_kinds"]))
+        self.summary_layout_count_var.set(str(stats["layout_count"]))
+
+    def _highlight_result_row(self, index):
+        for item in self.result_tree.get_children():
+            self.result_tree.item(item, tags=())
+        selected = f"result_{index + 1}"
+        if selected in self.result_tree.get_children():
+            self.result_tree.tag_configure("selected", background="#9ebfe6")
+            self.result_tree.item(selected, tags=("selected",))
+
+    def confirm_plan(self):
+        if not self.selected_candidate:
+            messagebox.showwarning("No Selection", "Please run nesting and select a plan first.")
+            return
+
+        stats = self.selected_candidate["stats"]
+        messagebox.showinfo(
+            "方案已确认",
+            "已选择当前套料方案。\n\n"
+            f"方案: {self.selected_candidate.get('plan_row_name', self.selected_candidate['name'])}\n"
+            f"排样结果: {stats['placed']}/{stats['expected']}\n"
+            f"利用率: {stats['utilization']:.2f}%"
+        )
+        self.status_var.set(f"Confirmed plan: {self.selected_candidate.get('plan_row_name', self.selected_candidate['name'])}")
+
 
 if __name__ == "__main__":
     root = tk.Tk()

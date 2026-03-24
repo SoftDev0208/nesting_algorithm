@@ -310,6 +310,52 @@
 			"quantity" : 39,
 			"unclosedcutlines" : ""
 		}
+	],
+	"plates" : 
+	[
+		{
+			"contours" : 
+			[
+				{
+					"bclose" : true,
+					"points" : 
+					[
+						{
+							"angle1" : 0.0,
+							"angle2" : 0.0,
+							"radius" : 0.0,
+							"x" : 0.0,
+							"y" : -0.0
+						},
+						{
+							"angle1" : 0.0,
+							"angle2" : 0.0,
+							"radius" : 0.0,
+							"x" : 0.0,
+							"y" : -1500.0
+						},
+						{
+							"angle1" : 0.0,
+							"angle2" : 0.0,
+							"radius" : 0.0,
+							"x" : 12000.0,
+							"y" : -1500.0
+						},
+						{
+							"angle1" : 0.0,
+							"angle2" : 0.0,
+							"radius" : 0.0,
+							"x" : 12000.0,
+							"y" : -0.0
+						}
+					]
+				}
+			],
+			"guid" : "6DD995E2-4BD9-452f-BEE3-FE2638876F6F",
+			"id" : "1",
+			"partinfs" : "",
+			"quantity" : 1
+		}
 	]
 	
 }

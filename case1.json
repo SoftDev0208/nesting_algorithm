@@ -72,18 +72,13 @@
 				"priority" : "50",
 				"rotation" : "1"
 			},
-			"quantity" : 6,
+			"quantity" : 22,
 			"unclosedcutlines" : ""
-		},
+		}
+	],
+	"plates" : 
+	[
 		{
-			"basepoint" : 
-			{
-				"angle1" : 0.0,
-				"angle2" : 0.0,
-				"radius" : 0.0,
-				"x" : 0.0,
-				"y" : 0.0
-			},
 			"contours" : 
 			[
 				{
@@ -95,56 +90,36 @@
 							"angle2" : 0.0,
 							"radius" : 0.0,
 							"x" : 0.0,
-							"y" : 20.0
+							"y" : -0.0
 						},
 						{
 							"angle1" : 0.0,
 							"angle2" : 0.0,
 							"radius" : 0.0,
 							"x" : 0.0,
-							"y" : 195.0
+							"y" : -900.0
 						},
 						{
 							"angle1" : 0.0,
 							"angle2" : 0.0,
 							"radius" : 0.0,
-							"x" : 1053.5699999999999,
-							"y" : 195.0
+							"x" : 9100.0,
+							"y" : -900.0
 						},
 						{
 							"angle1" : 0.0,
 							"angle2" : 0.0,
 							"radius" : 0.0,
-							"x" : 1053.5699999999999,
-							"y" : 20.0
-						},
-						{
-							"angle1" : 0.0,
-							"angle2" : 0.0,
-							"radius" : 0.0,
-							"x" : 1033.5699999999999,
-							"y" : 0.0
-						},
-						{
-							"angle1" : 0.0,
-							"angle2" : 0.0,
-							"radius" : 0.0,
-							"x" : 20.0,
-							"y" : 0.0
+							"x" : 9100.0,
+							"y" : -0.0
 						}
 					]
 				}
 			],
-			"id" : "4",
-			"marks" : "",
-			"partinfs" : 
-			{
-				"canmirror" : "0",
-				"priority" : "50",
-				"rotation" : "1"
-			},
-			"quantity" : 15,
-			"unclosedcutlines" : ""
+			"guid" : "6DD995E2-4BD9-452f-BEE3-FE2638876F6F",
+			"id" : "1",
+			"partinfs" : "",
+			"quantity" : 1
 		}
 	]
 	
